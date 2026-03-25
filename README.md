@@ -20,6 +20,3 @@ Instructions on how to install and use the provided tools will be available soon
 
 ## Usage
 Examples and use cases will be provided shortly.
-
-## Contributing
-Contributions are welcome! Please feel free to submit an issue or pull request.
