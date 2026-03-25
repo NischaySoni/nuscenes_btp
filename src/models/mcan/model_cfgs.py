@@ -21,7 +21,7 @@ class Cfgs(BaseCfgs):
         self.FLAT_OUT_SIZE = 1024
         self.FEAT_SIZE = {
             'OBJ_FEAT_SIZE': (80, 69),  
-            'BBOX_FEAT_SIZE': (80, 4)
+            'BBOX_FEAT_SIZE': (80, 9)
         }
         self.USE_BBOX_FEAT = False   
         self.BBOX_NORMALIZE = False
