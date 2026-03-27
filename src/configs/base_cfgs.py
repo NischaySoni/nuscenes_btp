@@ -54,6 +54,10 @@ class BaseCfgs(PATH):
             'bev': {
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features',
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'
+            },
+            'yolo': {
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'
             }
         }
 
@@ -195,6 +199,13 @@ class BaseCfgs(PATH):
     def add_args(self, args_dict):
         for arg in args_dict:
             setattr(self, arg, args_dict[arg])
+
+        # Merge top-level OBJ_FEAT_SIZE / BBOX_FEAT_SIZE into FEAT_SIZE dict
+        # (YAML configs may define these as top-level keys)
+        if hasattr(self, 'OBJ_FEAT_SIZE'):
+            self.FEAT_SIZE['OBJ_FEAT_SIZE'] = tuple(self.OBJ_FEAT_SIZE)
+        if hasattr(self, 'BBOX_FEAT_SIZE'):
+            self.FEAT_SIZE['BBOX_FEAT_SIZE'] = tuple(self.BBOX_FEAT_SIZE)
 
 
     def proc(self):

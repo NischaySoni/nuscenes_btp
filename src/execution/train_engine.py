@@ -42,7 +42,14 @@ def train_engine(__C, dataset, dataset_eval=None):
     if use_online_detection:
         print(">>> Using Online YOLO Detection & Radar Fusion <<<")
         detection_module = DetectionModule(__C).cuda()
-        detection_module.eval()  # Usually kept in eval mode if using pretrained weights
+        # NOTE: Do NOT call detection_module.eval() here!
+        # ultralytics YOLO overrides .train() to start a training session,
+        # so .eval() -> .train(False) inadvertently triggers YOLO training.
+        # Instead, freeze parameters and set the underlying model to eval mode.
+        for param in detection_module.parameters():
+            param.requires_grad = False
+        if hasattr(detection_module, 'yolo_model') and hasattr(detection_module.yolo_model, 'model'):
+            detection_module.yolo_model.model.eval()  # Set the inner nn.Module to eval
     # -------------------------------------------
 
     if __C.N_GPU > 1:
@@ -54,39 +61,56 @@ def train_engine(__C, dataset, dataset_eval=None):
     loss_fn = eval('torch.nn.' + __C.LOSS_FUNC_NAME_DICT[__C.LOSS_FUNC] + "(reduction='" + __C.LOSS_REDUCTION + "').cuda()")
 
     # Load checkpoint if resume training
+    ckpt_dir = __C.CKPTS_PATH + '/ckpt_' + __C.VERSION
     if __C.RESUME:
         print(' ========== Resume training')
         if __C.CKPT_PATH is not None:
             print('Warning: Now using CKPT_PATH args, CKPT_VERSION and CKPT_EPOCH will not work')
             path = __C.CKPT_PATH
+        elif hasattr(__C, 'CKPT_EPOCH') and __C.CKPT_EPOCH is not None:
+            path = ckpt_dir + '/epoch' + str(__C.CKPT_EPOCH) + '.pkl'
         else:
-            path = __C.CKPTS_PATH + '/ckpt_' + __C.VERSION + '/epoch' + str(__C.CKPT_EPOCH) + '.pkl'
+            # Auto-resume from latest.pkl if available
+            latest_path = ckpt_dir + '/latest.pkl'
+            if os.path.exists(latest_path):
+                path = latest_path
+                print('Auto-resuming from latest.pkl')
+            else:
+                print('WARNING: No checkpoint found to resume from. Starting fresh.')
+                path = None
 
-        print('Loading ckpt from {}'.format(path))
-        ckpt = torch.load(path)
-        print('Finish!')
+        if path is not None and os.path.exists(path):
+            print('Loading ckpt from {}'.format(path))
+            ckpt = torch.load(path)
+            print('Finish!')
 
-        if __C.N_GPU > 1:
-            net.load_state_dict(ckpt_proc(ckpt['state_dict']))
+            if __C.N_GPU > 1:
+                net.load_state_dict(ckpt_proc(ckpt['state_dict']))
+            else:
+                net.load_state_dict(ckpt['state_dict'])
+            
+            start_epoch = ckpt['epoch']
+            optim = get_optim(__C, net, data_size, ckpt['lr_base'])
+            optim._step = int(data_size / __C.BATCH_SIZE * start_epoch)
+            optim.optimizer.load_state_dict(ckpt['optimizer'])
         else:
-            net.load_state_dict(ckpt['state_dict'])
+            optim = get_optim(__C, net, data_size)
+            start_epoch = 0
         
-        start_epoch = ckpt['epoch']
-        optim = get_optim(__C, net, data_size, ckpt['lr_base'])
-        optim._step = int(data_size / __C.BATCH_SIZE * start_epoch)
-        optim.optimizer.load_state_dict(ckpt['optimizer'])
-        
-        if ('ckpt_' + __C.VERSION) not in os.listdir(__C.CKPTS_PATH):
-            os.mkdir(__C.CKPTS_PATH + '/ckpt_' + __C.VERSION)
+        os.makedirs(ckpt_dir, exist_ok=True)
     else:
-        if ('ckpt_' + __C.VERSION) not in os.listdir(__C.CKPTS_PATH):
-            os.mkdir(__C.CKPTS_PATH + '/ckpt_' + __C.VERSION)
+        os.makedirs(ckpt_dir, exist_ok=True)
         optim = get_optim(__C, net, data_size)
         start_epoch = 0
 
     loss_sum = 0
     named_params = list(net.named_parameters())
     grad_norm = np.zeros(len(named_params))
+
+    # --- Early stopping ---
+    early_stop_patience = getattr(__C, 'EARLY_STOP_PATIENCE', 5)
+    best_eval_loss = float('inf')
+    epochs_without_improvement = 0
 
     dataloader = Data.DataLoader(
         dataset,
@@ -213,19 +237,39 @@ def train_engine(__C, dataset, dataset_eval=None):
             'lr_base': optim.lr_base,
             'epoch': epoch_finish
         }
-        torch.save(state, __C.CKPTS_PATH + '/ckpt_' + __C.VERSION + '/epoch' + str(epoch_finish) + '.pkl')
+        # Save epoch-specific checkpoint
+        torch.save(state, ckpt_dir + '/epoch' + str(epoch_finish) + '.pkl')
+        # Always overwrite latest.pkl so we can resume after interrupts
+        torch.save(state, ckpt_dir + '/latest.pkl')
+        print(f'  [Checkpoint saved: epoch{epoch_finish}.pkl + latest.pkl]')
 
         # Logging
+        epoch_avg_loss = loss_sum / data_size
         with open(logfile_path, 'a+') as logfile:
             logfile.write('Epoch: ' + str(epoch_finish) +
-                          ', Loss: ' + str(loss_sum / data_size) +
+                          ', Loss: ' + str(epoch_avg_loss) +
                           ', Lr: ' + str(optim._rate) + '\n' +
                           'Elapsed time: ' + str(int(elapse_time)) + 
                           ', Speed(s/batch): ' + str(elapse_time / (step + 1)) + '\n\n')
 
         # Eval after frequency
-        if epoch % __C.EVAL_FREQUENCY == 0:
+        if __C.EVAL_FREQUENCY != 0 and epoch % __C.EVAL_FREQUENCY == 0:
             test_engine(__C, dataset_eval, state_dict=state_dict, save_eval_result=False)
+
+        # --- Early stopping check ---
+        if epoch_avg_loss < best_eval_loss:
+            best_eval_loss = epoch_avg_loss
+            epochs_without_improvement = 0
+            # Save best model
+            torch.save(state, ckpt_dir + '/best.pkl')
+            print(f'  [Best model updated at epoch {epoch_finish}, loss={epoch_avg_loss:.6f}]')
+        else:
+            epochs_without_improvement += 1
+            print(f'  [No improvement for {epochs_without_improvement}/{early_stop_patience} epochs]')
+        
+        if epochs_without_improvement >= early_stop_patience:
+            print(f'\n>>> Early stopping triggered after {epoch_finish} epochs (no improvement for {early_stop_patience} epochs) <<<')
+            break
 
         loss_sum = 0
         grad_norm = np.zeros(len(named_params))

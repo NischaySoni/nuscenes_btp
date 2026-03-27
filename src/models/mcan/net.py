@@ -277,6 +277,31 @@ class Net(nn.Module):
 
         self.__C = __C
 
+        # Determine feature format from config
+        feat_dim = __C.FEAT_SIZE['OBJ_FEAT_SIZE'][1]  # 69 for BEV, 13 for YOLO
+
+        if feat_dim == 69:
+            # BEV: 64 image dims + 5 radar dims
+            self.img_dim = 64
+            self.radar_dim = 5
+            self.feat_mode = 'bev'
+        elif feat_dim == 13:
+            # YOLO: 10 detection dims + 3 radar dims
+            self.img_dim = 10
+            self.radar_dim = 3
+            self.feat_mode = 'yolo'
+        else:
+            # Generic fallback: assume last 3 are radar
+            self.radar_dim = min(3, feat_dim)
+            self.img_dim = feat_dim - self.radar_dim
+            self.feat_mode = 'generic'
+
+        # Radar expansion target (project small radar dims to a larger space)
+        self.radar_expand = max(60, self.radar_dim)
+
+        print(f"  [MCAN] feat_mode={self.feat_mode}, feat_dim={feat_dim}, "
+              f"img_dim={self.img_dim}, radar_dim={self.radar_dim}")
+
         # ---------------- Language ----------------
 
         self.embedding = nn.Embedding(
@@ -297,11 +322,8 @@ class Net(nn.Module):
 
         # ---------------- Visual Adapters ----------------
 
-        # Image = 64 dims
-        self.img_adapter = Adapter(64, __C.HIDDEN_SIZE)
-
-        # Radar = 5 dims
-        self.radar_adapter = Adapter(60, __C.HIDDEN_SIZE)
+        self.img_adapter = Adapter(self.img_dim, __C.HIDDEN_SIZE)
+        self.radar_adapter = Adapter(self.radar_expand, __C.HIDDEN_SIZE)
 
         # ---------------- MCAN backbone ----------------
 
@@ -311,30 +333,23 @@ class Net(nn.Module):
         # ---------------- Flatten ----------------
 
         self.attflat_lang = AttFlat(__C)
-
         self.attflat_img = AttFlat(__C)
-
         self.attflat_radar = AttFlat(__C)
 
         # ---------------- Fusion Head ----------------
 
         self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-        # self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE + __C.FLAT_GLIMPSES)
 
         self.proj = nn.Linear(
             __C.FLAT_OUT_SIZE,
             answer_size
         )
-        # self.proj = nn.Linear(
-        #     __C.FLAT_OUT_SIZE + __C.FLAT_GLIMPSES,
-        #     answer_size
-        # )
 
 
     def forward(self, obj_feat, bbox_feat, ques_ix):
 
         """
-        obj_feat : (B,80,69)
+        obj_feat : (B, 80, feat_dim)  -- 69 for BEV, 13 for YOLO
         """
 
         # ------------------------------------------------
@@ -351,15 +366,17 @@ class Net(nn.Module):
         # Split Image + Radar
         # ------------------------------------------------
 
-        img_feat = obj_feat[:, :, :64]
+        img_feat = obj_feat[:, :, :self.img_dim]
+        radar_feat = obj_feat[:, :, self.img_dim:]
 
-        radar_feat = obj_feat[:, :, 64:]
+        # Radar confidence weighting on image features
+        radar_conf = radar_feat[:, :, -1].unsqueeze(-1)  # last radar dim as confidence
+        img_feat = img_feat * (1 + radar_conf)
 
-        radar_conf = radar_feat[:, :, -1].unsqueeze(-1) # radar object confidence
-        # object_count = radar_conf.sum(dim=1)
-        # object_count = object_count.unsqueeze(-1)
-        radar_feat = radar_feat.repeat(1,1,12)[:, :, :60]
-        img_feat = img_feat * (1 + radar_conf) # weight image features using radar
+        # Expand radar to target dimension via repeat
+        if self.radar_dim < self.radar_expand:
+            repeat_factor = (self.radar_expand // self.radar_dim) + 1
+            radar_feat = radar_feat.repeat(1, 1, repeat_factor)[:, :, :self.radar_expand]
 
         radar_feat = radar_feat / (torch.norm(radar_feat, dim=-1, keepdim=True) + 1e-6)
 
@@ -406,18 +423,16 @@ class Net(nn.Module):
         # ------------------------------------------------
         # Late Fusion
         # ------------------------------------------------
-        # radar_strength = radar_feat[:,:,-1].mean(dim=1, keepdim=True)
         proj_feat = lang_vec + img_vec + 0.1 * radar_vec  
 
         presence = radar_feat[:, :, 0].sum(dim=1, keepdim=True)
-        presence = presence.expand(-1,proj_feat.shape[1])
-        proj_feat = proj_feat + 0.2*presence  
-
-        # proj_feat = lang_vec + img_vec + radar_vec
+        presence = presence.expand(-1, proj_feat.shape[1])
+        proj_feat = proj_feat + 0.2 * presence  
 
         proj_feat = self.proj_norm(proj_feat)
 
         logits = self.proj(proj_feat)
 
         return logits
+
 

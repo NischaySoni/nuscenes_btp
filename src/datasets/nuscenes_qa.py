@@ -143,10 +143,14 @@ class NuScenes_QA(Data.Dataset):
         obj_feat = np.load(feat_path, mmap_mode='r').astype(np.float32)
         obj_feat = (obj_feat - obj_feat.mean()) / (obj_feat.std() + 1e-6)
 
+        # Dynamically detect and cache expected shape from first load
+        if not hasattr(self, '_feat_shape'):
+            self._feat_shape = obj_feat.shape
+            print(f'  Feature shape detected: {self._feat_shape}')
 
-        # ensure fixed shape
-        if obj_feat.shape != (80, 69):
-            raise ValueError(f"Invalid feature shape {obj_feat.shape}")
+        # Validate: must be (NUM_OBJECTS, feat_dim)
+        if obj_feat.shape[0] != self._feat_shape[0] or obj_feat.shape[1] != self._feat_shape[1]:
+            raise ValueError(f"Feature shape mismatch: expected {self._feat_shape}, got {obj_feat.shape}")
 
         return obj_feat
 
@@ -168,49 +172,4 @@ class NuScenes_QA(Data.Dataset):
 
         return ques_ix
 
-    # Add new method to load images:
-    def load_image(self, image_path):
-        """Load and preprocess image"""
-        img = cv2.imread(str(image_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        transform = transforms.Compose([
-            transforms.Resize((1080, 1920)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                               std=[0.229, 0.224, 0.225])
-        ])
-        
-        from PIL import Image
-        img = Image.fromarray(img)
-        return transform(img)
-    
-    # Add new method to load radar:
-    def load_radar_points(self, radar_path):
-        """Load radar point cloud"""
-        radar_data = np.load(radar_path)  # (N, 3) - x, y, z
-        return torch.from_numpy(radar_data).float()
-    
-    # Modify __getitem__ to return images and radar:
-    def __getitem__(self, idx):
-        # ... existing code ...
-        
-        # NEW: Load image if available
-        if hasattr(self, 'image_paths'):
-            image = self.load_image(self.image_paths[idx])
-        else:
-            image = None
-        
-        # NEW: Load radar if available
-        if hasattr(self, 'radar_paths'):
-            radar_points = self.load_radar_points(self.radar_paths[idx])
-        else:
-            radar_points = None
-        
-        return {
-            'question': question,
-            'answer': answer,
-            'image': image,                    # NEW
-            'radar_points': radar_points,      # NEW
-            'bbox_features': bbox_features,    # existing
-        }
+

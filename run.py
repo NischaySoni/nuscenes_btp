@@ -18,6 +18,7 @@ def parse_args():
     parser.add_argument('--MODEL', dest='MODEL',
                       choices=[
                            'mcan_small',
+                           'mcan_small_yolo',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -46,12 +47,15 @@ def parse_args():
                             'BEVDet',
                             'CenterPoint',
                             'MSMDFusion',
-                             'bev'
+                             'bev',
+                             'yolo'
                             ],
                          help='{'
                               'BEVDet,'
                               'CenterPoint,'
                               'MSMDFusion,'
+                              'bev,'
+                              'yolo,'
                               '}',
                          type=str, required=True)
 
