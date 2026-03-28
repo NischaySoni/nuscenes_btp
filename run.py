@@ -19,6 +19,7 @@ def parse_args():
                       choices=[
                            'mcan_small',
                            'mcan_small_yolo',
+                           'mcan_small_fusion',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -48,7 +49,8 @@ def parse_args():
                             'CenterPoint',
                             'MSMDFusion',
                              'bev',
-                             'yolo'
+                             'yolo',
+                             'fusion'
                             ],
                          help='{'
                               'BEVDet,'

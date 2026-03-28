@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
 # Modified NuScenes-QA Dataset Loader
-# Image + Radar BEV Features (80 × 69)
+# Supports: BEV (80×69), YOLO (80×13), and Fusion (both)
 # ------------------------------------------------------------------
 
 import os
@@ -11,8 +11,6 @@ import numpy as np
 import torch
 import torch.utils.data as Data
 import en_core_web_lg
-import cv2
-import torchvision.transforms as transforms
 from pathlib import Path
 
 
@@ -38,11 +36,42 @@ class NuScenes_QA(Data.Dataset):
         # --------------------------
         # ---- Feature paths ----
         # --------------------------
-        feat_dir = __C.FEATS_PATH[__C.VISUAL_FEATURE][split]
-        self.stk2featpath = {
-            os.path.basename(p).split('.')[0]: p
-            for p in glob.glob(feat_dir + '/*.npy')
-        }
+        self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
+
+        if self.is_fusion:
+            # Fusion mode: load from both BEV and YOLO directories
+            bev_dir = __C.FEATS_PATH['fusion']['bev'][split]
+            yolo_dir = __C.FEATS_PATH['fusion']['yolo'][split]
+
+            self.stk2bevpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(bev_dir + '/*.npy')
+            }
+            self.stk2yolopath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(yolo_dir + '/*.npy')
+            }
+
+            # Find common tokens (samples available in BOTH feature sets)
+            common = set(self.stk2bevpath.keys()) & set(self.stk2yolopath.keys())
+            bev_only = set(self.stk2bevpath.keys()) - common
+            yolo_only = set(self.stk2yolopath.keys()) - common
+
+            print(f'  [Fusion] BEV features: {len(self.stk2bevpath)}, '
+                  f'YOLO features: {len(self.stk2yolopath)}, '
+                  f'Common: {len(common)}')
+            if bev_only:
+                print(f'  [Fusion] {len(bev_only)} samples have BEV only (will zero-pad YOLO)')
+            if yolo_only:
+                print(f'  [Fusion] {len(yolo_only)} samples have YOLO only (will zero-pad BEV)')
+
+        else:
+            # Single-feature mode (existing behavior)
+            feat_dir = __C.FEATS_PATH[__C.VISUAL_FEATURE][split]
+            self.stk2featpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(feat_dir + '/*.npy')
+            }
 
         # --------------------------
         # ---- Tokenization ----
@@ -103,17 +132,53 @@ class NuScenes_QA(Data.Dataset):
 
     def __getitem__(self, idx):
         ques_ix, ans, scene_token = self.load_ques_ans(idx)
-        obj_feat = self.load_obj_feats(scene_token)
 
-        # dummy bbox (not used)
-        bbox_feat = np.zeros((80, 4), dtype=np.float32)
+        if self.is_fusion:
+            bev_feat = self._load_feat_safe(scene_token, 'bev', (80, 69))
+            yolo_feat = self._load_feat_safe(scene_token, 'yolo', (80, 13))
 
-        return (
-            torch.from_numpy(obj_feat),
-            torch.from_numpy(bbox_feat),
-            torch.from_numpy(ques_ix),
-            torch.from_numpy(ans)
-        )
+            return (
+                torch.from_numpy(bev_feat),
+                torch.from_numpy(yolo_feat),    # repurpose bbox_feat slot
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans)
+            )
+        else:
+            obj_feat = self.load_obj_feats(scene_token)
+            bbox_feat = np.zeros((80, 4), dtype=np.float32)
+
+            return (
+                torch.from_numpy(obj_feat),
+                torch.from_numpy(bbox_feat),
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans)
+            )
+
+
+    def _load_feat_safe(self, scene_token, feat_type, expected_shape):
+        """Load a feature file, zero-padding if missing."""
+        if feat_type == 'bev':
+            path_map = self.stk2bevpath
+        else:
+            path_map = self.stk2yolopath
+
+        if scene_token in path_map:
+            feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+            feat = (feat - feat.mean()) / (feat.std() + 1e-6)
+
+            # Shape validation
+            if feat.shape != expected_shape:
+                # Try to handle shape mismatches gracefully
+                result = np.zeros(expected_shape, dtype=np.float32)
+                r = min(feat.shape[0], expected_shape[0])
+                c = min(feat.shape[1], expected_shape[1])
+                result[:r, :c] = feat[:r, :c]
+                return result
+
+            return feat
+        else:
+            # Missing feature → return zeros
+            return np.zeros(expected_shape, dtype=np.float32)
 
 
     # ------------------------------------------------
@@ -135,7 +200,7 @@ class NuScenes_QA(Data.Dataset):
 
 
     # ------------------------------------------------
-    # ------------- Load BEV Features ----------------
+    # ------------- Load Features (single mode) ------
     # ------------------------------------------------
     def load_obj_feats(self, scene_token):
         feat_path = self.stk2featpath[scene_token]
@@ -171,5 +236,3 @@ class NuScenes_QA(Data.Dataset):
             ques_ix[ix] = self.token2ix.get(word, self.token2ix['UNK'])
 
         return ques_ix
-
-

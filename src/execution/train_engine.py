@@ -180,16 +180,36 @@ def train_engine(__C, dataset, dataset_eval=None):
                 # Primary Loss
                 loss = loss_fn(loss_item[0], loss_item[1])
 
-                # --- Custom Count Loss Logic ---
-                pred_probs = torch.softmax(loss_item[0], dim=1)
-                pred_idx = torch.argmax(pred_probs, dim=1)
+                # --- Improved Count Loss Logic ---
+                count_loss_weight = getattr(__C, 'COUNT_LOSS_WEIGHT', 0.1)
                 true_ans = loss_item[1].view(-1)
-                
-                # Mask to calculate absolute error for count-based answers (assume index <= 10)
+
+                # 1) Soft expected-value count loss (differentiable)
                 count_mask = (true_ans <= 10)
                 if count_mask.any():
-                    count_loss = torch.abs(pred_idx[count_mask] - true_ans[count_mask]).float().mean()
-                    loss = loss + 0.1 * count_loss
+                    pred_logits = loss_item[0]
+                    # Compute soft expected prediction over count answers (indices 0-10)
+                    count_probs = torch.softmax(pred_logits[:, :11], dim=1)  # (B, 11)
+                    count_indices = torch.arange(11, dtype=torch.float32, device=pred_logits.device)
+                    expected_count = (count_probs * count_indices.unsqueeze(0)).sum(dim=1)  # (B,)
+                    true_count = true_ans.float()
+                    soft_count_loss = F.smooth_l1_loss(
+                        expected_count[count_mask],
+                        true_count[count_mask]
+                    )
+                    loss = loss + count_loss_weight * soft_count_loss
+
+                # 2) Auxiliary count head loss (fusion model only)
+                actual_net = net.module if hasattr(net, 'module') else net
+                if hasattr(actual_net, '_count_logits') and count_mask.any():
+                    count_logits = actual_net._count_logits  # (B, 11)
+                    # Cross-entropy on count answers
+                    count_targets = true_ans[count_mask].clamp(0, 10)
+                    count_ce_loss = F.cross_entropy(
+                        count_logits[count_mask],
+                        count_targets
+                    )
+                    loss = loss + count_loss_weight * count_ce_loss
                 # -------------------------------
 
                 if __C.LOSS_REDUCTION == 'mean':

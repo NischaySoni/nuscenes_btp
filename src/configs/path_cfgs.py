@@ -30,7 +30,14 @@ class PATH:
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
             'yolo': {
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
-                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'},
+            'fusion': {
+                'bev': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
+                'yolo': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}}
         }
         self.VISUAL_FEATURE = 'bev'
 
@@ -64,11 +71,19 @@ class PATH:
     def check_path(self, vis_feat):
         print('Checking Data Path ........')
 
-        
-        for item in self.FEATS_PATH[vis_feat]:
-            if not os.path.exists(self.FEATS_PATH[vis_feat][item]):
-                print(self.FEATS_PATH[vis_feat][item], 'NOT EXIST')
-                exit(-1)
+        if vis_feat == 'fusion':
+            # Fusion mode: nested structure with bev and yolo sub-keys
+            for sub_feat in ['bev', 'yolo']:
+                for split in self.FEATS_PATH['fusion'][sub_feat]:
+                    p = self.FEATS_PATH['fusion'][sub_feat][split]
+                    if not os.path.exists(p):
+                        print(p, 'NOT EXIST')
+                        exit(-1)
+        else:
+            for item in self.FEATS_PATH[vis_feat]:
+                if not os.path.exists(self.FEATS_PATH[vis_feat][item]):
+                    print(self.FEATS_PATH[vis_feat][item], 'NOT EXIST')
+                    exit(-1)
 
         for item in self.RAW_PATH:
             if not os.path.exists(self.RAW_PATH[item]):
