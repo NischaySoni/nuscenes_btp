@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
-# NuScenes-QA
-# Modified for prediction + attention analysis
+# NuScenes-QA — Test/Evaluation Engine (v2)
+# Fixed: results list accumulation bug, handles 5-tuple dataset
 # ------------------------------------------------------------------
 
 import os, json, torch, pickle
@@ -11,13 +11,17 @@ import torch.utils.data as Data
 from src.models.model_loader import ModelLoader
 from src.execution.result_eval import Eval
 
-results = []
 
 # -------------------------------------------------------
 # Evaluation
 # -------------------------------------------------------
 @torch.no_grad()
 def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
+
+    # FIX: Use a local results list instead of module-level global
+    # The old code had a module-level `results = []` that was never
+    # cleared between evaluation calls, causing accumulation across epochs.
+    results = []
 
     # ---------------- Load checkpoint ----------------
 
@@ -78,17 +82,18 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
 
     # ---------------- Evaluation Loop ----------------
 
-    for step, (
-            obj_feat_iter,
-            bbox_feat_iter,
-            ques_ix_iter,
-            ans_iter
-    ) in enumerate(dataloader):
+    for step, batch in enumerate(dataloader):
 
         print("\rEvaluation: [step %4d/%4d]" % (
             step,
             int(data_size / __C.EVAL_BATCH_SIZE),
         ), end='          ')
+
+        # Handle both 5-tuple and 4-tuple
+        if len(batch) == 5:
+            obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter, qtype_iter = batch
+        else:
+            obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter = batch
 
         obj_feat_iter = obj_feat_iter.cuda()
         bbox_feat_iter = bbox_feat_iter.cuda()
@@ -119,18 +124,24 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
                 })
 
         # ------------------------------------------------
-        # Save attention maps
+        # Save attention maps (try both fusion and single mode)
         # ------------------------------------------------
 
         try:
+            # Try fusion mode attention
+            actual_net = net.module if hasattr(net, 'module') else net
+            if hasattr(actual_net, 'attflat_bev'):
+                att = actual_net.attflat_bev.last_attention.cpu().numpy()
+            elif hasattr(actual_net, 'attflat_img'):
+                att = actual_net.attflat_img.last_attention.cpu().numpy()
+            else:
+                att = None
 
-            att_img = net.attflat_img.last_attention.cpu().numpy()
-
-            np.save(
-                f"./outputs/attention/att_step_{step}.npy",
-                att_img
-            )
-
+            if att is not None:
+                np.save(
+                    f"./outputs/attention/att_step_{step}.npy",
+                    att
+                )
         except:
             pass
 
@@ -185,7 +196,7 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
 
         json.dump(results, f, indent=2)
 
-    print("\nSaved prediction_analysis.json")
+    print("\nSaved prediction_analysis.json (%d predictions)" % len(results))
 
 
 # -------------------------------------------------------

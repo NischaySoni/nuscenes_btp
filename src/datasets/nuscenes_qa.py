@@ -1,6 +1,7 @@
 # ------------------------------------------------------------------
 # Modified NuScenes-QA Dataset Loader
 # Supports: BEV (80×69), YOLO (80×13), and Fusion (both)
+# Returns question_type for type-aware training losses
 # ------------------------------------------------------------------
 
 import os
@@ -12,6 +13,16 @@ import torch
 import torch.utils.data as Data
 import en_core_web_lg
 from pathlib import Path
+
+
+# Question type mapping
+QTYPE_MAP = {
+    'exist': 0,
+    'count': 1,
+    'object': 2,
+    'status': 3,
+    'comparison': 4,
+}
 
 
 class NuScenes_QA(Data.Dataset):
@@ -87,6 +98,23 @@ class NuScenes_QA(Data.Dataset):
         )
         self.ans_size = len(self.ans2ix)
 
+        # --------------------------
+        # ---- Class Weights ----
+        # --------------------------
+        train_qa = qa_dict['train']['questions']
+        ans_counts = np.zeros(self.ans_size)
+        for item in train_qa:
+            ans_str = str(item['answer'])
+            if ans_str in self.ans2ix:
+                ans_counts[self.ans2ix[ans_str]] += 1
+                
+        ans_counts = np.maximum(ans_counts, 1) # avoid div by zero
+        total_samples = np.sum(ans_counts)
+        # Use inverse frequency, clamped to prevent exploding gradients for extremely rare classes
+        weights = total_samples / (self.ans_size * ans_counts)
+        weights = np.clip(weights, 0.2, 5.0) 
+        self.class_weights = torch.from_numpy(weights).float()
+
         print('Data Loading Finished!\n')
 
 
@@ -131,7 +159,7 @@ class NuScenes_QA(Data.Dataset):
 
 
     def __getitem__(self, idx):
-        ques_ix, ans, scene_token = self.load_ques_ans(idx)
+        ques_ix, ans, scene_token, qtype_ix = self.load_ques_ans(idx)
 
         if self.is_fusion:
             bev_feat = self._load_feat_safe(scene_token, 'bev', (80, 69))
@@ -141,7 +169,8 @@ class NuScenes_QA(Data.Dataset):
                 torch.from_numpy(bev_feat),
                 torch.from_numpy(yolo_feat),    # repurpose bbox_feat slot
                 torch.from_numpy(ques_ix),
-                torch.from_numpy(ans)
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),  # question type
             )
         else:
             obj_feat = self.load_obj_feats(scene_token)
@@ -151,7 +180,8 @@ class NuScenes_QA(Data.Dataset):
                 torch.from_numpy(obj_feat),
                 torch.from_numpy(bbox_feat),
                 torch.from_numpy(ques_ix),
-                torch.from_numpy(ans)
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),  # question type
             )
 
 
@@ -165,6 +195,9 @@ class NuScenes_QA(Data.Dataset):
         if scene_token in path_map:
             feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
             feat = (feat - feat.mean()) / (feat.std() + 1e-6)
+
+            # Clamp to prevent extreme outliers
+            feat = np.clip(feat, -5.0, 5.0)
 
             # Shape validation
             if feat.shape != expected_shape:
@@ -196,7 +229,11 @@ class NuScenes_QA(Data.Dataset):
         if self.__C.RUN_MODE == 'train':
             ans[0] = self.ans2ix[str(item['answer'])]
 
-        return ques_ix, ans, scene_token
+        # Extract question type from template_type field
+        template_type = item.get('template_type', 'exist')
+        qtype_ix = QTYPE_MAP.get(template_type, 0)
+
+        return ques_ix, ans, scene_token, qtype_ix
 
 
     # ------------------------------------------------

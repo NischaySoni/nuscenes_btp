@@ -1,6 +1,7 @@
 # ---------------------------------------------------------------
-# Dual-Encoder BEV + YOLO Fusion Config
+# Ultimate Dual-Encoder BEV + YOLO Fusion Config (v2)
 # BEV features: (80, 69)  |  YOLO features: (80, 13)
+# Separate backbones + Cross-modal attention + Vector gating
 # ---------------------------------------------------------------
 
 MODEL_USE: mcan
@@ -10,27 +11,27 @@ VISUAL_FEATURE: fusion
 OBJ_FEAT_SIZE: [80, 69]
 BBOX_FEAT_SIZE: [80, 13]
 
-# Network
-LAYER: 8
+# Network — 6 layers per backbone (separate, so total capacity = 12)
+LAYER: 6
 HIDDEN_SIZE: 512
 BBOXFEAT_EMB_SIZE: 512
 FF_SIZE: 2048
 MULTI_HEAD: 8
-DROPOUT_R: 0.15
+DROPOUT_R: 0.2
 FLAT_MLP_SIZE: 512
 FLAT_GLIMPSES: 3
 FLAT_OUT_SIZE: 1024
-USE_BBOX_FEAT: False
+USE_BBOX_FEAT: True
 BBOX_NORMALIZE: False
 
 # Execution
 BATCH_SIZE: 16
-LR_BASE: 0.00008
+LR_BASE: 0.0001
 LR_DECAY_R: 0.1
-LR_DECAY_LIST: [10, 14]
+LR_DECAY_LIST: [8, 12]
 WARMUP_EPOCH: 3
 MAX_EPOCH: 25
-GRAD_NORM_CLIP: -1
+GRAD_NORM_CLIP: 1.0
 GRAD_ACCU_STEPS: 1
 LOSS_FUNC: ce
 LOSS_REDUCTION: sum
@@ -38,6 +39,8 @@ OPT: Adam
 OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
 
 # Fusion-specific
-COUNT_LOSS_WEIGHT: 0.3
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
 USE_YOLO_DETECTION: False
 FUSE_RADAR_DATA: False

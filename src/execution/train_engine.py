@@ -1,7 +1,6 @@
 # ------------------------------------------------------------------
-# NuScenes-QA
-# Written by Tianwen Qian https://github.com/qiantianwen/NuScenes-QA
-# Integrated with Online Detection & Radar Fusion
+# NuScenes-QA — Training Engine (v2)
+# Fixes: correct count loss targeting, label smoothing, grad clipping
 # ------------------------------------------------------------------
 print(">>> train_engine.py started <<<", flush=True)
 
@@ -15,8 +14,6 @@ from src.utils.optim import get_optim, adjust_lr
 from src.execution.test_engine import test_engine, ckpt_proc
 from src.ops.detection import DetectionModule
 from src.ops.radar_fusion import RadarImageFusion
-
-import ipdb
 
 
 def train_engine(__C, dataset, dataset_eval=None):
@@ -42,14 +39,10 @@ def train_engine(__C, dataset, dataset_eval=None):
     if use_online_detection:
         print(">>> Using Online YOLO Detection & Radar Fusion <<<")
         detection_module = DetectionModule(__C).cuda()
-        # NOTE: Do NOT call detection_module.eval() here!
-        # ultralytics YOLO overrides .train() to start a training session,
-        # so .eval() -> .train(False) inadvertently triggers YOLO training.
-        # Instead, freeze parameters and set the underlying model to eval mode.
         for param in detection_module.parameters():
             param.requires_grad = False
         if hasattr(detection_module, 'yolo_model') and hasattr(detection_module.yolo_model, 'model'):
-            detection_module.yolo_model.model.eval()  # Set the inner nn.Module to eval
+            detection_module.yolo_model.model.eval()
     # -------------------------------------------
 
     if __C.N_GPU > 1:
@@ -57,8 +50,24 @@ def train_engine(__C, dataset, dataset_eval=None):
         if detection_module is not None:
             detection_module = nn.DataParallel(detection_module, device_ids=__C.DEVICES)
 
-    # Define Loss Function
-    loss_fn = eval('torch.nn.' + __C.LOSS_FUNC_NAME_DICT[__C.LOSS_FUNC] + "(reduction='" + __C.LOSS_REDUCTION + "').cuda()")
+    # Define Loss Function — with label smoothing for fusion mode
+    is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
+    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if is_fusion else 0.0
+    
+    # Use class-balanced weights from the dataset
+    class_weights = dataset.class_weights.cuda() if hasattr(dataset, 'class_weights') else None
+
+    if __C.LOSS_FUNC == 'ce':
+        loss_fn = nn.CrossEntropyLoss(
+            weight=class_weights,
+            reduction=__C.LOSS_REDUCTION,
+            label_smoothing=label_smoothing
+        ).cuda()
+        print(f"  [Loss] CrossEntropyLoss(reduction={__C.LOSS_REDUCTION}, "
+              f"label_smoothing={label_smoothing}, class_weights=True)")
+    else:
+        loss_fn = eval('torch.nn.' + __C.LOSS_FUNC_NAME_DICT[__C.LOSS_FUNC] +
+                       "(reduction='" + __C.LOSS_REDUCTION + "').cuda()")
 
     # Load checkpoint if resume training
     ckpt_dir = __C.CKPTS_PATH + '/ckpt_' + __C.VERSION
@@ -70,7 +79,6 @@ def train_engine(__C, dataset, dataset_eval=None):
         elif hasattr(__C, 'CKPT_EPOCH') and __C.CKPT_EPOCH is not None:
             path = ckpt_dir + '/epoch' + str(__C.CKPT_EPOCH) + '.pkl'
         else:
-            # Auto-resume from latest.pkl if available
             latest_path = ckpt_dir + '/latest.pkl'
             if os.path.exists(latest_path):
                 path = latest_path
@@ -88,7 +96,7 @@ def train_engine(__C, dataset, dataset_eval=None):
                 net.load_state_dict(ckpt_proc(ckpt['state_dict']))
             else:
                 net.load_state_dict(ckpt['state_dict'])
-            
+
             start_epoch = ckpt['epoch']
             optim = get_optim(__C, net, data_size, ckpt['lr_base'])
             optim._step = int(data_size / __C.BATCH_SIZE * start_epoch)
@@ -96,7 +104,7 @@ def train_engine(__C, dataset, dataset_eval=None):
         else:
             optim = get_optim(__C, net, data_size)
             start_epoch = 0
-        
+
         os.makedirs(ckpt_dir, exist_ok=True)
     else:
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -125,6 +133,11 @@ def train_engine(__C, dataset, dataset_eval=None):
     with open(logfile_path, 'a+') as logfile:
         logfile.write(str(__C))
 
+    # Count loss config
+    count_loss_weight = getattr(__C, 'COUNT_LOSS_WEIGHT', 0.3)
+    print(f"  [Config] count_loss_weight={count_loss_weight}, "
+          f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}")
+
     # Training Loop
     for epoch in range(start_epoch, __C.MAX_EPOCH):
 
@@ -136,10 +149,25 @@ def train_engine(__C, dataset, dataset_eval=None):
             adjust_lr(optim, __C.LR_DECAY_R)
 
         time_start = time.time()
-        
-        for step, (obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter) in enumerate(dataloader):
+
+        # Tracking for fusion diagnostics
+        gate_sum = 0.0
+        gate_count = 0
+        count_loss_sum = 0.0
+        count_loss_steps = 0
+
+        for step, batch in enumerate(dataloader):
 
             optim.zero_grad()
+
+            # --- Unpack 5-tuple (new format with question type) ---
+            if len(batch) == 5:
+                obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter, qtype_iter = batch
+                qtype_iter = qtype_iter.cuda()
+            else:
+                # Backward compatibility with 4-tuple
+                obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter = batch
+                qtype_iter = None
 
             # Transfer input data to GPU
             obj_feat_iter = obj_feat_iter.cuda()
@@ -148,27 +176,28 @@ def train_engine(__C, dataset, dataset_eval=None):
             ans_iter = ans_iter.cuda()
 
             # --- Online Detection Logic ---
-            # If enabled, obj_feat_iter (raw images) and bbox_feat_iter (radar) 
-            # are passed through the detection module to get actual visual features.
             if detection_module is not None:
                 with torch.no_grad():
-                    # This call generates the features live instead of using disk-precomputed ones
                     obj_feat_iter, bbox_feat_iter = detection_module(obj_feat_iter, bbox_feat_iter)
             # ------------------------------
 
             loss_tmp = 0
             for accu_step in range(__C.GRAD_ACCU_STEPS):
-                
+
                 # Slicing for Gradient Accumulation
                 sub_obj_feat_iter = obj_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
                 sub_bbox_feat_iter = bbox_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
                 sub_ques_ix_iter = ques_ix_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
                 sub_ans_iter = ans_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
+                if qtype_iter is not None:
+                    sub_qtype_iter = qtype_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
+                else:
+                    sub_qtype_iter = None
 
                 # Forward Pass
                 pred = net(sub_obj_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
 
-                # Prepare loss items (handling flattening or nonlinearities)
+                # Prepare loss items
                 loss_item = [pred, sub_ans_iter]
                 loss_nonlinear_list = __C.LOSS_FUNC_NONLINEAR[__C.LOSS_FUNC]
                 for item_ix, loss_nonlinear in enumerate(loss_nonlinear_list):
@@ -177,59 +206,87 @@ def train_engine(__C, dataset, dataset_eval=None):
                     elif loss_nonlinear:
                         loss_item[item_ix] = eval('F.' + loss_nonlinear + '(loss_item[item_ix], dim=1)')
 
-                # Primary Loss
+                # Primary Loss (with label smoothing if enabled)
                 loss = loss_fn(loss_item[0], loss_item[1])
 
-                # --- Improved Count Loss Logic ---
-                count_loss_weight = getattr(__C, 'COUNT_LOSS_WEIGHT', 0.1)
-                true_ans = loss_item[1].view(-1)
-
-                # 1) Soft expected-value count loss (differentiable)
-                count_mask = (true_ans <= 10)
-                if count_mask.any():
-                    pred_logits = loss_item[0]
-                    # Compute soft expected prediction over count answers (indices 0-10)
-                    count_probs = torch.softmax(pred_logits[:, :11], dim=1)  # (B, 11)
-                    count_indices = torch.arange(11, dtype=torch.float32, device=pred_logits.device)
-                    expected_count = (count_probs * count_indices.unsqueeze(0)).sum(dim=1)  # (B,)
-                    true_count = true_ans.float()
-                    soft_count_loss = F.smooth_l1_loss(
-                        expected_count[count_mask],
-                        true_count[count_mask]
-                    )
-                    loss = loss + count_loss_weight * soft_count_loss
-
-                # 2) Auxiliary count head loss (fusion model only)
+                # ================================================
+                # CORRECT Count Loss — uses question type, not answer index
+                # ================================================
                 actual_net = net.module if hasattr(net, 'module') else net
-                if hasattr(actual_net, '_count_logits') and count_mask.any():
-                    count_logits = actual_net._count_logits  # (B, 11)
-                    # Cross-entropy on count answers
-                    count_targets = true_ans[count_mask].clamp(0, 10)
-                    count_ce_loss = F.cross_entropy(
-                        count_logits[count_mask],
-                        count_targets
-                    )
-                    loss = loss + count_loss_weight * count_ce_loss
-                # -------------------------------
+
+                if sub_qtype_iter is not None and is_fusion:
+                    # count questions have qtype == 1
+                    count_mask = (sub_qtype_iter == 1)
+
+                    if count_mask.any():
+                        pred_logits = loss_item[0] if loss_item[0].dim() > 1 else pred
+                        true_ans = loss_item[1].view(-1)
+
+                        # 1) Soft expected-value count loss (differentiable)
+                        count_probs = torch.softmax(pred_logits[:, :11], dim=1)  # (B, 11)
+                        count_indices = torch.arange(11, dtype=torch.float32, device=pred_logits.device)
+                        expected_count = (count_probs * count_indices.unsqueeze(0)).sum(dim=1)
+                        true_count = true_ans.float()
+                        soft_count_loss = F.smooth_l1_loss(
+                            expected_count[count_mask],
+                            true_count[count_mask].clamp(0, 10)
+                        )
+                        loss = loss + count_loss_weight * soft_count_loss
+
+                        # 2) Auxiliary count head loss (fusion model)
+                        if hasattr(actual_net, '_count_logits'):
+                            count_logits = actual_net._count_logits
+                            count_targets = true_ans[count_mask].clamp(0, 10)
+                            count_ce_loss = F.cross_entropy(
+                                count_logits[count_mask],
+                                count_targets
+                            )
+                            loss = loss + count_loss_weight * count_ce_loss
+                            count_loss_sum += count_ce_loss.item()
+                            count_loss_steps += 1
+                            
+                        # 3) Explicit continuous object counter loss
+                        if hasattr(actual_net, '_explicit_count'):
+                            explicit_count_loss = F.smooth_l1_loss(
+                                actual_net._explicit_count[count_mask],
+                                true_count[count_mask].clamp(0, 10)
+                            )
+                            loss = loss + count_loss_weight * explicit_count_loss
+
+                # Track fusion gate values for diagnostics
+                if hasattr(actual_net, '_fusion_gate_mean'):
+                    gate_sum += actual_net._fusion_gate_mean
+                    gate_count += 1
+                # ================================================
 
                 if __C.LOSS_REDUCTION == 'mean':
                     loss /= __C.GRAD_ACCU_STEPS
-                
+
                 loss.backward()
 
                 loss_tmp += loss.cpu().data.numpy() * __C.GRAD_ACCU_STEPS
                 loss_sum += loss.cpu().data.numpy() * __C.GRAD_ACCU_STEPS
 
-            # Progress Bar / Print
+            # Progress Bar
             if dataset_eval is not None:
                 mode_str = __C.SPLIT['train'] + '->' + __C.SPLIT['val']
             else:
                 mode_str = __C.SPLIT['train'] + '->' + __C.SPLIT['test']
 
-            print("\r[Version %s][Dataset %s][Epoch %2d][Step %4d/%4d][%s] Loss: %.4f, Lr: %.2e" % (
-                __C.VERSION, __C.MODEL_USE, epoch + 1, step, int(data_size / __C.BATCH_SIZE),
-                mode_str, loss_tmp / __C.SUB_BATCH_SIZE, optim._rate), end='          ')
+            # Enhanced progress with fusion diagnostics
+            extra_info = ""
+            if is_fusion and gate_count > 0:
+                avg_gate = gate_sum / gate_count
+                extra_info = f", Gate: {avg_gate:.3f}"
+            if count_loss_steps > 0:
+                avg_closs = count_loss_sum / count_loss_steps
+                extra_info += f", CntL: {avg_closs:.3f}"
 
+            print("\r[Version %s][Dataset %s][Epoch %2d][Step %4d/%4d][%s] Loss: %.4f, Lr: %.2e%s" % (
+                __C.VERSION, __C.MODEL_USE, epoch + 1, step, int(data_size / __C.BATCH_SIZE),
+                mode_str, loss_tmp / __C.SUB_BATCH_SIZE, optim._rate, extra_info), end='          ')
+
+            # Gradient clipping — always clip for fusion mode
             if __C.GRAD_NORM_CLIP > 0:
                 nn.utils.clip_grad_norm_(net.parameters(), __C.GRAD_NORM_CLIP)
 
@@ -250,7 +307,7 @@ def train_engine(__C, dataset, dataset_eval=None):
             state_dict = net.module.state_dict()
         else:
             state_dict = net.state_dict()
-            
+
         state = {
             'state_dict': state_dict,
             'optimizer': optim.optimizer.state_dict(),
@@ -269,7 +326,7 @@ def train_engine(__C, dataset, dataset_eval=None):
             logfile.write('Epoch: ' + str(epoch_finish) +
                           ', Loss: ' + str(epoch_avg_loss) +
                           ', Lr: ' + str(optim._rate) + '\n' +
-                          'Elapsed time: ' + str(int(elapse_time)) + 
+                          'Elapsed time: ' + str(int(elapse_time)) +
                           ', Speed(s/batch): ' + str(elapse_time / (step + 1)) + '\n\n')
 
         # Eval after frequency
@@ -286,7 +343,7 @@ def train_engine(__C, dataset, dataset_eval=None):
         else:
             epochs_without_improvement += 1
             print(f'  [No improvement for {epochs_without_improvement}/{early_stop_patience} epochs]')
-        
+
         if epochs_without_improvement >= early_stop_patience:
             print(f'\n>>> Early stopping triggered after {epoch_finish} epochs (no improvement for {early_stop_patience} epochs) <<<')
             break
