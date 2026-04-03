@@ -9,7 +9,7 @@ VISUAL_FEATURE: fusion
 
 # Feature sizes — primary slot = BEV, secondary (bbox) slot = YOLO
 OBJ_FEAT_SIZE: [80, 69]
-BBOX_FEAT_SIZE: [80, 13]
+BBOX_FEAT_SIZE: [80, 269]
 
 # Network — 6 layers per backbone (separate, so total capacity = 12)
 LAYER: 6

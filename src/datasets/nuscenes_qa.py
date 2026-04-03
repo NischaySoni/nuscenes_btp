@@ -145,8 +145,11 @@ class NuScenes_QA(Data.Dataset):
         ques_ix, ans, scene_token, qtype_ix = self.load_ques_ans(idx)
 
         if self.is_fusion:
-            bev_feat = self._load_feat_safe(scene_token, 'bev', (80, 69))
-            yolo_feat = self._load_feat_safe(scene_token, 'yolo', (80, 13))
+            bev_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
+            yolo_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 13)
+
+            bev_feat = self._load_feat_safe(scene_token, 'bev', bev_shape)
+            yolo_feat = self._load_feat_safe(scene_token, 'yolo', yolo_shape)
 
             return (
                 torch.from_numpy(bev_feat),

@@ -29,15 +29,15 @@ class PATH:
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features',
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
             'yolo': {
-                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
-                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'},
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich'},
             'fusion': {
                 'bev': {
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
                 'yolo': {
-                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
-                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}}
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich'}}
         }
         self.VISUAL_FEATURE = 'bev'
 
