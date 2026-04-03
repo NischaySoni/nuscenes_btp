@@ -59,6 +59,60 @@ class Adapter(nn.Module):
 
 
 # ------------------------------------------------
+# YOLO Class-Aware Adapter
+# ------------------------------------------------
+
+class YOLOClassAdapter(nn.Module):
+    """
+    Projects YOLO features (13-dim) to hidden_dim AND embeds
+    the class_id (dim 9) through a learnable embedding table.
+    This gives the model semantic identity for each detection.
+    """
+
+    def __init__(self, input_dim, hidden_dim, num_classes=80, emb_dim=128):
+        super(YOLOClassAdapter, self).__init__()
+
+        # Standard projection for the raw 13-dim features
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        # Learnable class embedding: class_id -> emb_dim -> hidden_dim
+        self.class_emb = nn.Embedding(num_classes, emb_dim)
+        self.class_proj = nn.Sequential(
+            nn.Linear(emb_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, feat):
+        """
+        feat: (B, 80, 13) — raw YOLO features
+        dim 9 = class_id (float, 0-79)
+        """
+        feat = feat.to(torch.float32)
+
+        mask = make_mask(feat)
+
+        # Extract class IDs before projection (dim 9)
+        class_ids = feat[:, :, 9].long().clamp(0, 79)  # (B, 80)
+
+        # Project raw features
+        proj = self.fc(feat)  # (B, 80, hidden_dim)
+
+        # Embed class IDs and add to projection
+        cls_emb = self.class_emb(class_ids)       # (B, 80, emb_dim)
+        cls_proj = self.class_proj(cls_emb)        # (B, 80, hidden_dim)
+
+        # Additive fusion: features + class identity
+        proj = proj + cls_proj
+
+        return proj, mask
+
+
+# ------------------------------------------------
 # Attention Flattening
 # ------------------------------------------------
 
@@ -269,9 +323,9 @@ class Net(nn.Module):
         # ================================================
         if self.is_fusion:
 
-            # --- Visual Adapters (2-layer for richer projection) ---
+            # --- Visual Adapters ---
             self.bev_adapter = Adapter(bev_dim, __C.HIDDEN_SIZE)
-            self.yolo_adapter = Adapter(yolo_dim, __C.HIDDEN_SIZE)
+            self.yolo_adapter = YOLOClassAdapter(yolo_dim, __C.HIDDEN_SIZE)
 
             # --- SEPARATE MCAN backbones (key fix: no shared weights) ---
             self.backbone_bev = MCA_ED(__C)
@@ -296,6 +350,9 @@ class Net(nn.Module):
 
             # --- MLP Fusion (Replaces Element-Wise Gate) ---
             self.fusion_mlp = MLPConcatFusion(__C)
+
+            # --- BEV residual weight (learnable, init 0.3) ---
+            self.bev_residual_weight = nn.Parameter(torch.tensor(0.3))
 
             # --- Count head (improved) ---
             self.count_head = CountHead(__C)
@@ -422,10 +479,11 @@ class Net(nn.Module):
         fused_visual = self.fusion_mlp(bev_vec, yolo_vec)
 
         # ------------------------------------------------
-        # Classify
+        # Classify (with BEV residual)
         # ------------------------------------------------
 
-        proj_feat = lang_vec + fused_visual
+        bev_residual = self.bev_residual_weight * bev_vec
+        proj_feat = lang_vec + fused_visual + bev_residual
         proj_feat = self.proj_norm(proj_feat)
         logits = self.proj(proj_feat)
 

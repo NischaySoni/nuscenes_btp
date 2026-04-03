@@ -168,6 +168,10 @@ class NuScenes_QA(Data.Dataset):
             )
 
 
+    # Columns in YOLO features that are categorical (not continuous)
+    # dim 9 = class_id (0-79 COCO class), dim 12 = radar_match (0/1 flag)
+    YOLO_CATEGORICAL_DIMS = {9, 12}
+
     def _load_feat_safe(self, scene_token, feat_type, expected_shape):
         """Load a feature file, zero-padding if missing."""
         if feat_type == 'bev':
@@ -177,14 +181,31 @@ class NuScenes_QA(Data.Dataset):
 
         if scene_token in path_map:
             feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
-            feat = (feat - feat.mean()) / (feat.std() + 1e-6)
 
-            # Clamp to prevent extreme outliers
-            feat = np.clip(feat, -5.0, 5.0)
+            if feat_type == 'yolo':
+                # YOLO: per-column normalization, preserving categorical dims
+                # Each column has different semantics/scales (coords 0-1,
+                # confidence 0-1, class_id 0-79, radar velocity etc.)
+                for col in range(feat.shape[1]):
+                    if col in self.YOLO_CATEGORICAL_DIMS:
+                        continue  # keep class_id and radar_match raw
+                    col_data = feat[:, col]
+                    col_std = col_data.std()
+                    if col_std > 1e-6:
+                        feat[:, col] = (col_data - col_data.mean()) / col_std
+                    # else: column is constant (all zeros), leave as-is
+
+                # Clamp only continuous dims
+                for col in range(feat.shape[1]):
+                    if col not in self.YOLO_CATEGORICAL_DIMS:
+                        feat[:, col] = np.clip(feat[:, col], -5.0, 5.0)
+            else:
+                # BEV: global z-score normalization (unchanged)
+                feat = (feat - feat.mean()) / (feat.std() + 1e-6)
+                feat = np.clip(feat, -5.0, 5.0)
 
             # Shape validation
             if feat.shape != expected_shape:
-                # Try to handle shape mismatches gracefully
                 result = np.zeros(expected_shape, dtype=np.float32)
                 r = min(feat.shape[0], expected_shape[0])
                 c = min(feat.shape[1], expected_shape[1])

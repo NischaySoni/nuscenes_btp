@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------
-# Ultimate Dual-Encoder BEV + YOLO Fusion Config (v2)
+# Dual-Encoder BEV + YOLO Fusion Config (v4)
 # BEV features: (80, 69)  |  YOLO features: (80, 13)
-# Separate backbones + Cross-modal attention + Vector gating
+# Phase 1: Class embedding + BEV residual + better training
 # ---------------------------------------------------------------
 
 MODEL_USE: mcan
@@ -24,13 +24,13 @@ FLAT_OUT_SIZE: 1024
 USE_BBOX_FEAT: False
 BBOX_NORMALIZE: False
 
-# Execution
+# Execution — better training recipe
 BATCH_SIZE: 16
 LR_BASE: 0.0001
 LR_DECAY_R: 0.1
-LR_DECAY_LIST: [8, 12]
-WARMUP_EPOCH: 3
-MAX_EPOCH: 25
+LR_DECAY_LIST: [10, 15]
+WARMUP_EPOCH: 2
+MAX_EPOCH: 20
 GRAD_NORM_CLIP: 1.0
 GRAD_ACCU_STEPS: 1
 LOSS_FUNC: ce
@@ -40,7 +40,7 @@ OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
 
 # Fusion-specific
 COUNT_LOSS_WEIGHT: 0.5
-LABEL_SMOOTHING: 0.1
+LABEL_SMOOTHING: 0.0
 CROSS_MODAL_LAYERS: 2
 USE_YOLO_DETECTION: False
 FUSE_RADAR_DATA: False
