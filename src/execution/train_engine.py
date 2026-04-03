@@ -53,18 +53,14 @@ def train_engine(__C, dataset, dataset_eval=None):
     # Define Loss Function — with label smoothing for fusion mode
     is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
     label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if is_fusion else 0.0
-    
-    # Use class-balanced weights from the dataset
-    class_weights = dataset.class_weights.cuda() if hasattr(dataset, 'class_weights') else None
 
     if __C.LOSS_FUNC == 'ce':
         loss_fn = nn.CrossEntropyLoss(
-            weight=class_weights,
             reduction=__C.LOSS_REDUCTION,
             label_smoothing=label_smoothing
         ).cuda()
         print(f"  [Loss] CrossEntropyLoss(reduction={__C.LOSS_REDUCTION}, "
-              f"label_smoothing={label_smoothing}, class_weights=True)")
+              f"label_smoothing={label_smoothing})")
     else:
         loss_fn = eval('torch.nn.' + __C.LOSS_FUNC_NAME_DICT[__C.LOSS_FUNC] +
                        "(reduction='" + __C.LOSS_REDUCTION + "').cuda()")
@@ -244,14 +240,7 @@ def train_engine(__C, dataset, dataset_eval=None):
                             loss = loss + count_loss_weight * count_ce_loss
                             count_loss_sum += count_ce_loss.item()
                             count_loss_steps += 1
-                            
-                        # 3) Explicit continuous object counter loss
-                        if hasattr(actual_net, '_explicit_count'):
-                            explicit_count_loss = F.smooth_l1_loss(
-                                actual_net._explicit_count[count_mask],
-                                true_count[count_mask].clamp(0, 10)
-                            )
-                            loss = loss + count_loss_weight * explicit_count_loss
+
 
                 # Track fusion gate values for diagnostics
                 if hasattr(actual_net, '_fusion_gate_mean'):

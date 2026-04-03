@@ -147,94 +147,64 @@ class CrossModalAttention(nn.Module):
 
 
 # ------------------------------------------------
-# Vector Fusion Gate
+# MLP Concat Fusion
 # ------------------------------------------------
 
-class VectorFusionGate(nn.Module):
+class MLPConcatFusion(nn.Module):
     """
-    Per-dimension gating conditioned on language + both visual features.
-
-    Input:  lang_vec (B, D), bev_vec (B, D), yolo_vec (B, D)
-    Output: gate (B, D) in [0, 1]
-
-    fused = gate * bev_vec + (1-gate) * yolo_vec
+    Fuses two independent visual modalities by concatenation
+    and non-linear MLP projection.
+    Input: bev_vec (B, D), yolo_vec (B, D)
     """
 
     def __init__(self, __C):
-        super(VectorFusionGate, self).__init__()
+        super(MLPConcatFusion, self).__init__()
 
         D = __C.FLAT_OUT_SIZE  # 1024
 
-        self.gate = nn.Sequential(
-            nn.Linear(D * 3, D),
+        self.fuse = nn.Sequential(
+            nn.Linear(D * 2, D),
             nn.ReLU(inplace=True),
             nn.Dropout(__C.DROPOUT_R),
-            nn.Linear(D, D),
-            nn.Sigmoid()
+            nn.Linear(D, D)
         )
 
-    def forward(self, lang_vec, bev_vec, yolo_vec):
-        combined = torch.cat([lang_vec, bev_vec, yolo_vec], dim=-1)  # (B, 3D)
-        gate = self.gate(combined)  # (B, D)
-        return gate
+    def forward(self, bev_vec, yolo_vec):
+        combined = torch.cat([bev_vec, yolo_vec], dim=-1)  # (B, 2D)
+        return self.fuse(combined)
 
 
 # ------------------------------------------------
-# Advanced Seq Counter
+# Count Prediction Head (V2)
 # ------------------------------------------------
 
 class CountHead(nn.Module):
     """
-    Advanced count head with object-aware soft counting.
-    Uses unflattened sequences to explicitly score sequence objects.
     Predicts count classes 0..10.
     """
 
     def __init__(self, __C):
         super(CountHead, self).__init__()
 
-        D = __C.HIDDEN_SIZE         # Per-token dimension (512)
-        D_lang = __C.FLAT_OUT_SIZE  # 1024
+        D = __C.FLAT_OUT_SIZE
 
-        self.score_mlp = nn.Sequential(
-            nn.Linear(D * 2 + D_lang, D),
+        self.count_mlp = nn.Sequential(
+            nn.Linear(D * 2, D),
             nn.ReLU(inplace=True),
             nn.Dropout(__C.DROPOUT_R),
-            nn.Linear(D, 1) 
-        )
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(D + D_lang + 1, D),
+            nn.Linear(D, D // 2),
             nn.ReLU(inplace=True),
             nn.Dropout(__C.DROPOUT_R),
-            nn.Linear(D, 11)   # 11 classes: 0..10
+            nn.Linear(D // 2, 11)   # 11 classes: 0..10
         )
 
-    def forward(self, bev_seq, yolo_seq, lang_vec):
+    def forward(self, fused_feat, lang_feat):
         """
-        bev_seq: (B, N, D)
-        yolo_seq: (B, N, D)
-        lang_vec: (B, 1024)
+        fused_feat: (B, D)
+        lang_feat:  (B, D)
         """
-        B, N, D = bev_seq.shape
-        
-        # Expand language to sequence length (B, N, 1024)
-        lang_expanded = lang_vec.unsqueeze(1).expand(B, N, lang_vec.shape[-1])
-        
-        combined_seq = torch.cat([bev_seq, yolo_seq, lang_expanded], dim=-1) # (B, N, D*2 + D_lang)
-        
-        # Score each token (B, N, 1)
-        objectness = self.score_mlp(combined_seq).sigmoid()
-        expected_count = objectness.sum(dim=1) # (B, 1)
-        
-        # Pool features weighted by objectness
-        pooled_feat = ((bev_seq + yolo_seq) * objectness).mean(dim=1) # (B, D)
-        
-        # Classify
-        clf_input = torch.cat([pooled_feat, lang_vec, expected_count], dim=-1)
-        logits = self.classifier(clf_input)
-        
-        return logits, expected_count.squeeze(1)
+        combined = torch.cat([fused_feat, lang_feat], dim=-1)  # (B, 2D)
+        return self.count_mlp(combined)
 
 
 # ------------------------------------------------
@@ -302,18 +272,6 @@ class Net(nn.Module):
             # --- Visual Adapters (2-layer for richer projection) ---
             self.bev_adapter = Adapter(bev_dim, __C.HIDDEN_SIZE)
             self.yolo_adapter = Adapter(yolo_dim, __C.HIDDEN_SIZE)
-            
-            # --- Spatial Bounding Box Positional Embedding ---
-            # Used for explicitly injecting location metadata into YOLO
-            self.use_bbox_feat = getattr(__C, 'USE_BBOX_FEAT', False)
-            if self.use_bbox_feat:
-                print("  [MCAN Fusion] explicitly injecting spatial bounding-box embeddings.")
-                self.bbox_emb = nn.Sequential(
-                    nn.Linear(4, __C.HIDDEN_SIZE // 2),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(__C.DROPOUT_R),
-                    nn.Linear(__C.HIDDEN_SIZE // 2, __C.HIDDEN_SIZE)
-                )
 
             # --- SEPARATE MCAN backbones (key fix: no shared weights) ---
             self.backbone_bev = MCA_ED(__C)
@@ -336,8 +294,8 @@ class Net(nn.Module):
                 nn.Dropout(__C.DROPOUT_R),
             )
 
-            # --- Vector Fusion gate ---
-            self.fusion_gate = VectorFusionGate(__C)
+            # --- MLP Fusion (Replaces Element-Wise Gate) ---
+            self.fusion_mlp = MLPConcatFusion(__C)
 
             # --- Count head (improved) ---
             self.count_head = CountHead(__C)
@@ -404,12 +362,6 @@ class Net(nn.Module):
 
         bev_proj, bev_mask = self.bev_adapter(bev_feat)      # (B, 80, 512)
         yolo_proj, yolo_mask = self.yolo_adapter(yolo_feat)  # (B, 80, 512)
-        
-        # Inject positional embeddings
-        if getattr(self, 'use_bbox_feat', False):
-            # First 4 dimensions are x1, y1, x2, y2
-            bbox_coords = yolo_feat[:, :, :4]
-            yolo_proj = yolo_proj + self.bbox_emb(bbox_coords)
 
         # ------------------------------------------------
         # SEPARATE MCAN co-attention for BEV
@@ -464,12 +416,10 @@ class Net(nn.Module):
         )  # (B, 1024)
 
         # ------------------------------------------------
-        # Vector-Level Gating
-        # Per-dimension gate conditioned on lang + both visuals
+        # Late Fusion: MLP instead of Element-Wise Gating
         # ------------------------------------------------
 
-        gate = self.fusion_gate(lang_vec, bev_vec, yolo_vec)  # (B, 1024)
-        fused_visual = gate * bev_vec + (1.0 - gate) * yolo_vec  # (B, 1024)
+        fused_visual = self.fusion_mlp(bev_vec, yolo_vec)
 
         # ------------------------------------------------
         # Classify
@@ -483,12 +433,11 @@ class Net(nn.Module):
         # Count head (auxiliary output)
         # ------------------------------------------------
 
-        count_logits, explicit_count = self.count_head(bev_out, yolo_out, lang_vec)
+        count_logits = self.count_head(fused_visual, lang_vec)
 
         # Store for the training engine to use
         self._count_logits = count_logits
-        self._explicit_count = explicit_count
-        self._fusion_gate_mean = gate.detach().mean().item()
+        self._fusion_gate_mean = 0.5  # dummy for diagnostics
 
         return logits
 

@@ -98,23 +98,6 @@ class NuScenes_QA(Data.Dataset):
         )
         self.ans_size = len(self.ans2ix)
 
-        # --------------------------
-        # ---- Class Weights ----
-        # --------------------------
-        train_qa = qa_dict['train']['questions']
-        ans_counts = np.zeros(self.ans_size)
-        for item in train_qa:
-            ans_str = str(item['answer'])
-            if ans_str in self.ans2ix:
-                ans_counts[self.ans2ix[ans_str]] += 1
-                
-        ans_counts = np.maximum(ans_counts, 1) # avoid div by zero
-        total_samples = np.sum(ans_counts)
-        # Use inverse frequency, clamped to prevent exploding gradients for extremely rare classes
-        weights = total_samples / (self.ans_size * ans_counts)
-        weights = np.clip(weights, 0.2, 5.0) 
-        self.class_weights = torch.from_numpy(weights).float()
-
         print('Data Loading Finished!\n')
 
 
