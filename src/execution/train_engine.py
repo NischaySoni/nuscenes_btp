@@ -50,9 +50,10 @@ def train_engine(__C, dataset, dataset_eval=None):
         if detection_module is not None:
             detection_module = nn.DataParallel(detection_module, device_ids=__C.DEVICES)
 
-    # Define Loss Function — with label smoothing for fusion mode
-    is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
-    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if is_fusion else 0.0
+    # Define Loss Function — with label smoothing for fusion/annot mode
+    vis_feat = getattr(__C, 'VISUAL_FEATURE', 'bev')
+    is_fusion = (vis_feat == 'fusion')
+    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if vis_feat in ('fusion', 'annot') else 0.0
 
     if __C.LOSS_FUNC == 'ce':
         loss_fn = nn.CrossEntropyLoss(
@@ -230,7 +231,7 @@ def train_engine(__C, dataset, dataset_eval=None):
                         loss = loss + count_loss_weight * soft_count_loss
 
                         # 2) Auxiliary count head loss (fusion model)
-                        if hasattr(actual_net, '_count_logits'):
+                        if hasattr(actual_net, '_count_logits') and actual_net._count_logits is not None:
                             count_logits = actual_net._count_logits
                             count_targets = true_ans[count_mask].clamp(0, 10)
                             count_ce_loss = F.cross_entropy(

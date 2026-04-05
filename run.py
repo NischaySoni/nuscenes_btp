@@ -20,6 +20,7 @@ def parse_args():
                            'mcan_small',
                            'mcan_small_yolo',
                            'mcan_small_fusion',
+                           'mcan_annotation',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -50,7 +51,8 @@ def parse_args():
                             'MSMDFusion',
                              'bev',
                              'yolo',
-                             'fusion'
+                             'fusion',
+                             'annot'
                             ],
                          help='{'
                               'BEVDet,'

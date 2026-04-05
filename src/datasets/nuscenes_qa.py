@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
 # Modified NuScenes-QA Dataset Loader
-# Supports: BEV (80×69), YOLO (80×13), and Fusion (both)
+# Supports: BEV, YOLO, Fusion (BEV+YOLO), and Annotation (annot)
 # Returns question_type for type-aware training losses
 # ------------------------------------------------------------------
 
@@ -48,6 +48,7 @@ class NuScenes_QA(Data.Dataset):
         # ---- Feature paths ----
         # --------------------------
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
+        self.is_annot = (__C.VISUAL_FEATURE == 'annot')
 
         if self.is_fusion:
             # Fusion mode: load from both BEV and YOLO directories
@@ -77,12 +78,13 @@ class NuScenes_QA(Data.Dataset):
                 print(f'  [Fusion] {len(yolo_only)} samples have YOLO only (will zero-pad BEV)')
 
         else:
-            # Single-feature mode (existing behavior)
+            # Single-feature mode: BEV, YOLO, or Annotation
             feat_dir = __C.FEATS_PATH[__C.VISUAL_FEATURE][split]
             self.stk2featpath = {
                 os.path.basename(p).split('.')[0]: p
                 for p in glob.glob(feat_dir + '/*.npy')
             }
+            print(f'  [{__C.VISUAL_FEATURE}] Loaded {len(self.stk2featpath)} feature files')
 
         # --------------------------
         # ---- Tokenization ----
@@ -153,21 +155,22 @@ class NuScenes_QA(Data.Dataset):
 
             return (
                 torch.from_numpy(bev_feat),
-                torch.from_numpy(yolo_feat),    # repurpose bbox_feat slot
+                torch.from_numpy(yolo_feat),
                 torch.from_numpy(ques_ix),
                 torch.from_numpy(ans),
-                torch.tensor(qtype_ix, dtype=torch.long),  # question type
+                torch.tensor(qtype_ix, dtype=torch.long),
             )
         else:
             obj_feat = self.load_obj_feats(scene_token)
-            bbox_feat = np.zeros((80, 4), dtype=np.float32)
+            obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
+            bbox_feat = np.zeros((obj_shape[0], 4), dtype=np.float32)
 
             return (
                 torch.from_numpy(obj_feat),
                 torch.from_numpy(bbox_feat),
                 torch.from_numpy(ques_ix),
                 torch.from_numpy(ans),
-                torch.tensor(qtype_ix, dtype=torch.long),  # question type
+                torch.tensor(qtype_ix, dtype=torch.long),
             )
 
 
@@ -247,19 +250,36 @@ class NuScenes_QA(Data.Dataset):
     # ------------- Load Features (single mode) ------
     # ------------------------------------------------
     def load_obj_feats(self, scene_token):
-        feat_path = self.stk2featpath[scene_token]
+        if scene_token not in self.stk2featpath:
+            # Missing feature → return zeros
+            obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
+            return np.zeros(obj_shape, dtype=np.float32)
 
+        feat_path = self.stk2featpath[scene_token]
         obj_feat = np.load(feat_path, mmap_mode='r').astype(np.float32)
-        obj_feat = (obj_feat - obj_feat.mean()) / (obj_feat.std() + 1e-6)
+
+        if self.is_annot:
+            # Annotation features are PRE-NORMALIZED in extraction script
+            # Dims 0-1 are categorical (category_id, attribute_id) — keep raw
+            # Dims 2-15 are already scaled to ~[-1, 1] range
+            pass
+        else:
+            # BEV/YOLO: global z-score normalization
+            obj_feat = (obj_feat - obj_feat.mean()) / (obj_feat.std() + 1e-6)
 
         # Dynamically detect and cache expected shape from first load
         if not hasattr(self, '_feat_shape'):
             self._feat_shape = obj_feat.shape
             print(f'  Feature shape detected: {self._feat_shape}')
 
-        # Validate: must be (NUM_OBJECTS, feat_dim)
-        if obj_feat.shape[0] != self._feat_shape[0] or obj_feat.shape[1] != self._feat_shape[1]:
-            raise ValueError(f"Feature shape mismatch: expected {self._feat_shape}, got {obj_feat.shape}")
+        # Shape validation with padding
+        obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else self._feat_shape
+        if obj_feat.shape != obj_shape:
+            result = np.zeros(obj_shape, dtype=np.float32)
+            r = min(obj_feat.shape[0], obj_shape[0])
+            c = min(obj_feat.shape[1], obj_shape[1])
+            result[:r, :c] = obj_feat[:r, :c]
+            return result
 
         return obj_feat
 

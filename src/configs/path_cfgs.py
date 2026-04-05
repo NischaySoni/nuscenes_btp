@@ -37,7 +37,10 @@ class PATH:
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
                 'yolo': {
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich',
-                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich'}}
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features_rich'}},
+            'annot': {
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'},
         }
         self.VISUAL_FEATURE = 'bev'
 

@@ -113,6 +113,65 @@ class YOLOClassAdapter(nn.Module):
 
 
 # ------------------------------------------------
+# Annotation Feature Adapter
+# ------------------------------------------------
+
+class AnnotationAdapter(nn.Module):
+    """
+    Projects structured annotation features (16-dim) to hidden_dim.
+    Embeds category_id (dim 0) and attribute_id (dim 1) through
+    learnable embeddings, then concatenates with continuous features.
+    """
+
+    def __init__(self, hidden_dim, num_categories=23, num_attributes=9,
+                 cat_emb_dim=64, attr_emb_dim=32):
+        super(AnnotationAdapter, self).__init__()
+
+        # Category embedding: 23 NuScenes categories
+        self.cat_emb = nn.Embedding(num_categories, cat_emb_dim)
+
+        # Attribute embedding: 9 attributes (0 = none)
+        self.attr_emb = nn.Embedding(num_attributes + 1, attr_emb_dim)
+
+        # 14 continuous dims + cat_emb_dim + attr_emb_dim
+        total_input = 14 + cat_emb_dim + attr_emb_dim
+
+        self.proj = nn.Sequential(
+            nn.Linear(total_input, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, feat):
+        """
+        feat: (B, N, 16)
+        dim 0 = category_id (0-22)
+        dim 1 = attribute_id (0-8)
+        dims 2-15 = continuous features (pre-normalized)
+        """
+        feat = feat.to(torch.float32)
+        mask = make_mask(feat)
+
+        # Extract categorical IDs
+        cat_ids = feat[:, :, 0].long().clamp(0, 22)
+        attr_ids = feat[:, :, 1].long().clamp(0, 8)
+        continuous = feat[:, :, 2:]  # (B, N, 14)
+
+        # Embed categories and attributes
+        cat_vec = self.cat_emb(cat_ids)       # (B, N, 64)
+        attr_vec = self.attr_emb(attr_ids)    # (B, N, 32)
+
+        # Concatenate all features
+        combined = torch.cat([continuous, cat_vec, attr_vec], dim=-1)
+
+        # Project to hidden dim
+        proj = self.proj(combined)
+
+        return proj, mask
+
+
+# ------------------------------------------------
 # Attention Flattening
 # ------------------------------------------------
 
@@ -273,9 +332,10 @@ class Net(nn.Module):
 
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
+        self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'annot')
 
         # Determine feature dimensions
-        bev_dim = __C.FEAT_SIZE['OBJ_FEAT_SIZE'][1]   # 69 for BEV
+        bev_dim = __C.FEAT_SIZE['OBJ_FEAT_SIZE'][1]
 
         if self.is_fusion:
             yolo_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 13 for YOLO
@@ -367,6 +427,32 @@ class Net(nn.Module):
             print(f"  [MCAN Fusion] Total params: {total_params:,}, Trainable: {trainable:,}")
 
         # ================================================
+        # ANNOTATION MODE — Simple, effective
+        # ================================================
+        elif self.is_annot:
+
+            feat_dim = bev_dim  # 16 for annotation features
+            print(f"  [MCAN] ANNOTATION mode: feat_dim={feat_dim}")
+
+            # --- Annotation adapter (embeds category + attribute) ---
+            self.annot_adapter = AnnotationAdapter(__C.HIDDEN_SIZE)
+
+            # --- Single MCAN backbone ---
+            self.backbone = MCA_ED(__C)
+
+            # --- Flatten ---
+            self.attflat_lang = AttFlat(__C)
+            self.attflat_vis = AttFlat(__C)
+
+            # --- Classification ---
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN Annot] Total params: {total_params:,}, Trainable: {trainable:,}")
+
+        # ================================================
         # SINGLE-FEATURE MODE (backward compatible)
         # ================================================
         else:
@@ -406,6 +492,8 @@ class Net(nn.Module):
 
         if self.is_fusion:
             return self._forward_fusion(obj_feat, bbox_feat, lang_feat, lang_mask)
+        elif self.is_annot:
+            return self._forward_annot(obj_feat, lang_feat, lang_mask)
         else:
             return self._forward_single(obj_feat, lang_feat, lang_mask)
 
@@ -496,6 +584,48 @@ class Net(nn.Module):
         # Store for the training engine to use
         self._count_logits = count_logits
         self._fusion_gate_mean = 0.5  # dummy for diagnostics
+
+        return logits
+
+
+    def _forward_annot(self, annot_feat, lang_feat, lang_mask):
+        """Annotation-based path: simple, effective."""
+
+        # ------------------------------------------------
+        # Adapt annotation features (embed category + attribute)
+        # ------------------------------------------------
+
+        vis_proj, vis_mask = self.annot_adapter(annot_feat)  # (B, N, hidden)
+
+        # ------------------------------------------------
+        # MCAN co-attention: language ↔ visual
+        # ------------------------------------------------
+
+        lang_out, vis_out = self.backbone(
+            lang_feat,
+            vis_proj,
+            lang_mask,
+            vis_mask
+        )
+
+        # ------------------------------------------------
+        # Flatten
+        # ------------------------------------------------
+
+        lang_vec = self.attflat_lang(lang_out, lang_mask)  # (B, FLAT_OUT_SIZE)
+        vis_vec = self.attflat_vis(vis_out, vis_mask)       # (B, FLAT_OUT_SIZE)
+
+        # ------------------------------------------------
+        # Classify
+        # ------------------------------------------------
+
+        proj_feat = lang_vec + vis_vec
+        proj_feat = self.proj_norm(proj_feat)
+        logits = self.proj(proj_feat)
+
+        # Dummy values for training engine compatibility
+        self._count_logits = None
+        self._fusion_gate_mean = 0.0
 
         return logits
 

@@ -20,3 +20,15 @@ Instructions on how to install and use the provided tools will be available soon
 
 ## Usage
 Examples and use cases will be provided shortly.
+
+## How to run
+
+### Pre-compute annotation features
+```bash
+python precompute_annotation_features.py --data-root /path/to/nuscenes
+```
+
+### Train with annotation features
+```bash
+python run.py --config configs/mcan_annotation.yaml --visual-feature annot
+```

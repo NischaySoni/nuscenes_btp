@@ -68,6 +68,10 @@ class BaseCfgs(PATH):
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'
                 }
+            },
+            'annot': {
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'
             }
         }
 
