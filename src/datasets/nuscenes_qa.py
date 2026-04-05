@@ -165,6 +165,22 @@ class NuScenes_QA(Data.Dataset):
             obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
             bbox_feat = np.zeros((obj_shape[0], 4), dtype=np.float32)
 
+            # Feature augmentation during training (for detected/annot mode)
+            if (self.is_annot and
+                self.__C.RUN_MODE == 'train' and
+                getattr(self.__C, 'FEAT_AUGMENT', False)):
+
+                noise_std = getattr(self.__C, 'FEAT_AUGMENT_NOISE', 0.05)
+                drop_rate = getattr(self.__C, 'FEAT_AUGMENT_DROP', 0.1)
+
+                # Add Gaussian noise to continuous dims (2-15), skip categorical (0,1)
+                noise = np.random.randn(obj_shape[0], 14).astype(np.float32) * noise_std
+                obj_feat[:, 2:] = obj_feat[:, 2:] + noise
+
+                # Randomly drop objects (zero out entire rows)
+                drop_mask = np.random.rand(obj_shape[0]) < drop_rate
+                obj_feat[drop_mask] = 0.0
+
             return (
                 torch.from_numpy(obj_feat),
                 torch.from_numpy(bbox_feat),
