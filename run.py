@@ -21,6 +21,7 @@ def parse_args():
                            'mcan_small_yolo',
                            'mcan_small_fusion',
                            'mcan_annotation',
+                           'mcan_detected',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -52,7 +53,8 @@ def parse_args():
                              'bev',
                              'yolo',
                              'fusion',
-                             'annot'
+                             'annot',
+                             'detected'
                             ],
                          help='{'
                               'BEVDet,'

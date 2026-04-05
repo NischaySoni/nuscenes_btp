@@ -332,7 +332,7 @@ class Net(nn.Module):
 
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
-        self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'annot')
+        self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('annot', 'detected'))
 
         # Determine feature dimensions
         bev_dim = __C.FEAT_SIZE['OBJ_FEAT_SIZE'][1]

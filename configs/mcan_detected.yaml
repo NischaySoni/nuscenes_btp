@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------
+# Detection-Based VQA Config (Camera + Radar)
+# Uses YOLOv8 detections + radar fusion in same (100, 16) format
+# Same architecture as annotation model but with slightly more
+# regularization to handle noisier predicted features
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: detected
+
+# Feature sizes — same as annotation: (100, 16)
+OBJ_FEAT_SIZE: [100, 16]
+BBOX_FEAT_SIZE: [100, 4]
+
+# Same architecture as annotation model
+LAYER: 3
+HIDDEN_SIZE: 256
+BBOXFEAT_EMB_SIZE: 256
+FF_SIZE: 1024
+MULTI_HEAD: 8
+DROPOUT_R: 0.2
+FLAT_MLP_SIZE: 256
+FLAT_GLIMPSES: 3
+FLAT_OUT_SIZE: 512
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+
+# Training recipe (slightly adjusted for noisier features)
+BATCH_SIZE: 32
+LR_BASE: 0.00015
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 15]
+WARMUP_EPOCH: 4
+MAX_EPOCH: 20
+GRAD_NORM_CLIP: 0.5
+GRAD_ACCU_STEPS: 1
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Same annotation-style processing
+LABEL_SMOOTHING: 0.1
+COUNT_LOSS_WEIGHT: 0.0
+CROSS_MODAL_LAYERS: 0
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False

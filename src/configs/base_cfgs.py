@@ -72,6 +72,10 @@ class BaseCfgs(PATH):
             'annot': {
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features',
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'
+            },
+            'detected': {
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features'
             }
         }
 

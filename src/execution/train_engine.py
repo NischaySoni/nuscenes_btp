@@ -50,10 +50,10 @@ def train_engine(__C, dataset, dataset_eval=None):
         if detection_module is not None:
             detection_module = nn.DataParallel(detection_module, device_ids=__C.DEVICES)
 
-    # Define Loss Function — with label smoothing for fusion/annot mode
+    # Define Loss Function — with label smoothing for fusion/annot/detected mode
     vis_feat = getattr(__C, 'VISUAL_FEATURE', 'bev')
     is_fusion = (vis_feat == 'fusion')
-    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if vis_feat in ('fusion', 'annot') else 0.0
+    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if vis_feat in ('fusion', 'annot', 'detected') else 0.0
 
     if __C.LOSS_FUNC == 'ce':
         loss_fn = nn.CrossEntropyLoss(

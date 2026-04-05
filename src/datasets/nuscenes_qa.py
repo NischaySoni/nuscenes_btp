@@ -48,7 +48,7 @@ class NuScenes_QA(Data.Dataset):
         # ---- Feature paths ----
         # --------------------------
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
-        self.is_annot = (__C.VISUAL_FEATURE == 'annot')
+        self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected'))
 
         if self.is_fusion:
             # Fusion mode: load from both BEV and YOLO directories

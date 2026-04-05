@@ -32,3 +32,13 @@ python precompute_annotation_features.py --data-root /path/to/nuscenes
 ```bash
 python run.py --config configs/mcan_annotation.yaml --visual-feature annot
 ```
+
+### Pre-compute detected features
+```bash
+python precompute_detected_features.py --data-root /path/to/nuscenes
+```
+
+### Train with detected features
+```bash
+python run.py --config configs/mcan_detected.yaml --visual-feature detected
+```
