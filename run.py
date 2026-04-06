@@ -107,6 +107,12 @@ def parse_args():
                            'CKPT_VERSION and CKPT_EPOCH',
                       type=str)
 
+    parser.add_argument('--FINETUNE_FROM', dest='FINETUNE_FROM',
+                      help='Path to a checkpoint (.pkl) to fine-tune from. '
+                           'This loads the model weights but starts train at '
+                           'Epoch 0 with a fresh optimizer.',
+                      type=str)
+
     parser.add_argument('--ACCU', dest='GRAD_ACCU_STEPS',
                       help='split batch to reduce gpu memory usage',
                       type=int)

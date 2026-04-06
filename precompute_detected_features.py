@@ -26,19 +26,11 @@ Feature layout (same as annotation features):
   [14] angle_cos       (cos of angle from ego forward)
   [15] visibility      (detection confidence as proxy)
 
-Improvements over V1:
-  1. Expanded COCO → NuScenes mapping (covers 15+ COCO classes)
-  2. Lower confidence threshold (0.25) to catch more objects
-  3. Larger radar match radius (5.0m) for better velocity coverage
-  4. Better attribute inference using bbox size + position context
-  5. Uses yolov8x (extra-large) for better detection quality
-  6. Smarter cross-camera NMS with confidence averaging
-
-Output shape: (MAX_OBJECTS, 16) per sample — same format as annotation features.
+Output shape: (MAX_OBJECTS, 16) per sample
 
 Usage:
     CUDA_VISIBLE_DEVICES=1 python precompute_detected_features.py
-    CUDA_VISIBLE_DEVICES=1 python precompute_detected_features.py --out-dir /path/to/output
+    CUDA_VISIBLE_DEVICES=1 python precompute_detected_features.py --data-root /path/to/nuscenes
 """
 
 import os
@@ -56,12 +48,10 @@ from tqdm import tqdm
 DATA_ROOT = "/media/nas_mount/anwar2/experiment/dataset/nuscenes"
 VERSION = "v1.0-trainval"
 OUT_DIR = "/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features"
-YOLO_MODEL = "yolov8x.pt"       # Extra-large model for better accuracy
-CONF_THRESHOLD = 0.25            # Lower threshold to catch more objects
+YOLO_MODEL = "yolov8m.pt"
+CONF_THRESHOLD = 0.3
 MAX_OBJECTS = 100
 FEAT_DIM = 16
-RADAR_MATCH_RADIUS = 5.0        # Increased from 3.0 for better radar coverage
-NMS_3D_RADIUS = 2.5             # Cross-camera duplicate removal radius
 
 # All 6 NuScenes cameras (360° coverage)
 CAMERA_CHANNELS = [
@@ -84,49 +74,25 @@ RADAR_CHANNELS = [
 
 
 # ============================================================
-# EXPANDED COCO → NuScenes Category Mapping
+# COCO → NuScenes Category Mapping
 # ============================================================
 
+# COCO class IDs that map to NuScenes categories
 # COCO class ID → (NuScenes category_id, is_vehicle flag)
-# Much more comprehensive mapping than V1
 COCO_TO_NUSCENES = {
-    # --- Pedestrians ---
     0:  (0, False),    # person → human.pedestrian.adult
-
-    # --- Vehicles ---
     1:  (10, False),   # bicycle → vehicle.bicycle
     2:  (8, True),     # car → vehicle.car
     3:  (9, True),     # motorcycle → vehicle.motorcycle
     5:  (12, True),    # bus → vehicle.bus.rigid
     7:  (13, True),    # truck → vehicle.truck
-
-    # --- Animals ---
-    15: (7, False),    # cat → animal
-    16: (7, False),    # dog → animal
-    17: (7, False),    # horse → animal
-    18: (7, False),    # sheep → animal
-    19: (7, False),    # cow → animal
-
-    # --- Barriers & Traffic objects ---
-    # These often appear in NuScenes traffic scenes
-    9:  (19, False),   # traffic light → movable_object.trafficcone (proxy)
-    11: (19, False),   # stop sign → movable_object.trafficcone (proxy)
-    10: (19, False),   # fire hydrant → movable_object.trafficcone (proxy)
-    13: (18, False),   # bench → movable_object.barrier (proxy)
-
-    # --- Large vehicles ---
-    4:  (14, True),    # airplane → vehicle.construction (as large vehicle)
-    6:  (13, True),    # train → vehicle.truck (as large vehicle)
-    8:  (14, True),    # boat → vehicle.construction (as large vehicle)
-
-    # --- Movable objects / debris ---
-    24: (20, False),   # backpack → movable_object.pushable_pullable
-    25: (20, False),   # umbrella → movable_object.pushable_pullable
-    26: (20, False),   # handbag → movable_object.pushable_pullable
-    28: (20, False),   # suitcase → movable_object.pushable_pullable
+    # Less common but useful mappings
+    16: (7, False),    # dog/cat/animal → animal
+    # Construction vehicles
+    8:  (14, True),    # boat (closest to construction in COCO) → vehicle.construction
 }
 
-# Set of COCO IDs we care about
+# Set of COCO IDs we care about (ignore all others)
 VALID_COCO_IDS = set(COCO_TO_NUSCENES.keys())
 
 
@@ -169,55 +135,36 @@ CAMERA_HEIGHT = 1.5
 # 3D Position Estimation
 # ============================================================
 
-def estimate_depth_from_bbox(bbox, img_h, img_w, cam_intrinsic, cat_id):
+def estimate_depth_from_bbox(bbox_bottom_y, img_h, cam_intrinsic, cat_id):
     """
-    Estimate depth using multiple cues:
-    1. Ground plane geometry (primary)
-    2. Known object size + apparent size (secondary)
-    3. Class-based prior (fallback)
-    """
-    x1, y1, x2, y2 = bbox
-    bottom_y = y2
-    bbox_h = y2 - y1
-    bbox_w = x2 - x1
+    Estimate depth using camera geometry (ground plane assumption).
+    Uses the bottom edge of the bounding box as the ground contact point.
 
+    depth = (camera_height * fy) / (bbox_bottom_y - cy)
+
+    Falls back to class-based prior if geometry fails.
+    """
     fy = cam_intrinsic[1][1]
     cy = cam_intrinsic[1][2]
 
-    # Method 1: Ground plane geometry
-    dy = bottom_y - cy
-    depth_geo = None
-    if dy > 10:
-        depth_geo = (CAMERA_HEIGHT * fy) / dy
-        depth_geo = np.clip(depth_geo, 1.0, 80.0)
+    # The bottom of the bbox should be below the principal point
+    # for objects on the ground plane
+    dy = bbox_bottom_y - cy
 
-    # Method 2: Known height + apparent height
-    depth_size = None
-    known_h = NUSCENES_SIZE_PRIORS.get(cat_id, (1.0, 1.0, 1.7))[2]
-    if bbox_h > 10:  # avoid tiny boxes
-        depth_size = (known_h * fy) / bbox_h
-        depth_size = np.clip(depth_size, 1.0, 80.0)
+    if dy > 10:  # Object below horizon (on ground plane)
+        depth = (CAMERA_HEIGHT * fy) / dy
+        depth = np.clip(depth, 1.0, 80.0)  # reasonable range
+        return depth
 
-    # Combine estimates
-    if depth_geo is not None and depth_size is not None:
-        # Weighted average, trust geometry more for ground-level objects
-        depth = 0.6 * depth_geo + 0.4 * depth_size
-    elif depth_geo is not None:
-        depth = depth_geo
-    elif depth_size is not None:
-        depth = depth_size
-    else:
-        # Fallback: class-based depth prior
-        class_prior_depths = {
-            0: 12.0, 1: 10.0, 2: 12.0, 3: 10.0, 4: 12.0,
-            5: 12.0, 6: 12.0, 7: 15.0, 8: 20.0, 9: 15.0,
-            10: 12.0, 11: 25.0, 12: 25.0, 13: 22.0, 14: 20.0,
-            15: 20.0, 16: 20.0, 17: 25.0, 18: 8.0, 19: 8.0,
-            20: 8.0, 21: 8.0, 22: 10.0,
-        }
-        depth = class_prior_depths.get(cat_id, 15.0)
-
-    return depth
+    # Fallback: class-based depth prior
+    class_prior_depths = {
+        0: 12.0, 1: 10.0, 2: 12.0, 3: 10.0, 4: 12.0,
+        5: 12.0, 6: 12.0, 7: 15.0, 8: 20.0, 9: 15.0,
+        10: 12.0, 11: 25.0, 12: 25.0, 13: 22.0, 14: 20.0,
+        15: 20.0, 16: 20.0, 17: 25.0, 18: 8.0, 19: 8.0,
+        20: 8.0, 21: 8.0, 22: 10.0,
+    }
+    return class_prior_depths.get(cat_id, 15.0)
 
 
 def pixel_to_ego_3d(cx_pixel, cy_pixel, depth, cam_intrinsic,
@@ -225,6 +172,7 @@ def pixel_to_ego_3d(cx_pixel, cy_pixel, depth, cam_intrinsic,
                     ego_rotation):
     """
     Back-project a 2D pixel + depth into ego vehicle coordinates.
+
     Pipeline: pixel → camera 3D → ego 3D
     """
     fx = cam_intrinsic[0][0]
@@ -240,29 +188,27 @@ def pixel_to_ego_3d(cx_pixel, cy_pixel, depth, cam_intrinsic,
     pos_cam = np.array([x_cam, y_cam, z_cam])
 
     # Camera frame → ego frame
+    # cam_rotation: Quaternion (calibrated_sensor rotation)
+    # cam_translation: [x, y, z] (calibrated_sensor translation)
     pos_ego = cam_rotation.rotate(pos_cam) + np.array(cam_translation)
 
     return pos_ego
 
 
 # ============================================================
-# Attribute Inference (V2 - more nuanced)
+# Attribute Inference
 # ============================================================
 
-def infer_attribute(cat_id, vx, vy, bbox_area_ratio, pos_ego):
+def infer_attribute(cat_id, vx, vy):
     """
-    Infer NuScenes attribute from category, velocity, and context.
-    V2 improvements:
-    - Uses bbox area ratio to distinguish parked vs stopped
-    - Uses position relative to road edge for parking inference
+    Infer NuScenes attribute from category and velocity.
     """
     speed = np.sqrt(vx**2 + vy**2)
-    dist_from_ego = np.sqrt(pos_ego[0]**2 + pos_ego[1]**2)
 
-    # Vehicle categories
+    # Vehicle categories (car, motorcycle, bus, truck, construction, emergency, trailer)
     vehicle_cats = {8, 9, 11, 12, 13, 14, 15, 16, 17}
     # Cycle categories
-    cycle_cats = {10}
+    cycle_cats = {10}  # bicycle
     # Pedestrian categories
     ped_cats = {0, 1, 2, 3, 4, 5, 6}
 
@@ -272,13 +218,7 @@ def infer_attribute(cat_id, vx, vy, bbox_area_ratio, pos_ego):
         elif speed > 0.1:
             return 3   # vehicle.stopped
         else:
-            # Distinguish parked vs stopped:
-            # Far from ego + lateral position → likely parked
-            lateral_dist = abs(pos_ego[1])
-            if lateral_dist > 3.0 or dist_from_ego > 25.0:
-                return 2   # vehicle.parked
-            else:
-                return 3   # vehicle.stopped
+            return 2   # vehicle.parked
 
     elif cat_id in cycle_cats:
         if speed > 0.3:
@@ -287,14 +227,9 @@ def infer_attribute(cat_id, vx, vy, bbox_area_ratio, pos_ego):
             return 5   # cycle.without_rider
 
     elif cat_id in ped_cats:
-        if speed > 0.2:
+        if speed > 0.3:
             return 6   # pedestrian.moving
-        elif speed > 0.05:
-            return 7   # pedestrian.standing
         else:
-            # Close to ground / large bbox → might be sitting
-            if pos_ego[2] < -0.5:
-                return 8   # pedestrian.sitting_lying_down
             return 7   # pedestrian.standing
 
     return 0  # no attribute
@@ -308,6 +243,9 @@ def get_all_radar_points_in_ego(nusc, sample, Quaternion):
     """
     Collect radar points from ALL 5 radar sensors and transform
     them into the ego vehicle coordinate frame.
+
+    Returns: dict with 'points_3d', 'velocities_xy', 'rcs'
+             all in ego frame
     """
     ego_points = []
     ego_vel_x = []
@@ -319,6 +257,8 @@ def get_all_radar_points_in_ego(nusc, sample, Quaternion):
     # Get ego pose from LIDAR_TOP (reference frame)
     lidar_sd = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
     ego_pose = nusc.get('ego_pose', lidar_sd['ego_pose_token'])
+    ego_translation = np.array(ego_pose['translation'])
+    ego_rotation = Quaternion(ego_pose['rotation'])
 
     for radar_ch in RADAR_CHANNELS:
         if radar_ch not in sample['data']:
@@ -340,6 +280,7 @@ def get_all_radar_points_in_ego(nusc, sample, Quaternion):
 
         # Get calibration
         radar_cs = nusc.get('calibrated_sensor', radar_sd['calibrated_sensor_token'])
+        radar_ego = nusc.get('ego_pose', radar_sd['ego_pose_token'])
 
         # Radar → ego: sensor frame → vehicle frame
         pts = radar_pc.points.copy()  # (18, N)
@@ -369,27 +310,20 @@ def get_all_radar_points_in_ego(nusc, sample, Quaternion):
         return None
 
     return {
-        'points_3d': np.hstack(ego_points),
+        'points_3d': np.hstack(ego_points),    # (3, total_N)
         'vel_x': np.concatenate(ego_vel_x),
         'vel_y': np.concatenate(ego_vel_y),
         'rcs': np.concatenate(ego_rcs),
     }
 
 
-def match_radar_to_detection(det_pos_ego, radar_data, cat_id,
-                             match_radius=RADAR_MATCH_RADIUS):
+def match_radar_to_detection(det_pos_ego, radar_data, match_radius=3.0):
     """
     Find the closest radar point to a detected object position (in ego frame).
-    V2: Uses category-adaptive match radius (larger for big vehicles).
-    Returns (vx, vy, matched, refined_depth) tuple.
+    Returns (vx, vy, matched) tuple.
     """
     if radar_data is None:
-        return 0.0, 0.0, False, None
-
-    # Category-adaptive radius: large vehicles get bigger search area
-    large_vehicles = {11, 12, 13, 14, 17}  # bus, truck, construction, trailer
-    if cat_id in large_vehicles:
-        match_radius = match_radius * 1.5
+        return 0.0, 0.0, False
 
     pts = radar_data['points_3d']  # (3, N)
 
@@ -402,13 +336,9 @@ def match_radar_to_detection(det_pos_ego, radar_data, cat_id,
     if dists[min_idx] < match_radius:
         vx = radar_data['vel_x'][min_idx]
         vy = radar_data['vel_y'][min_idx]
-        # Compute radar-based depth for refinement
-        radar_depth = np.sqrt(
-            pts[0, min_idx]**2 + pts[1, min_idx]**2 + pts[2, min_idx]**2
-        )
-        return vx, vy, True, radar_depth
+        return vx, vy, True
 
-    return 0.0, 0.0, False, None
+    return 0.0, 0.0, False
 
 
 # ============================================================
@@ -418,7 +348,6 @@ def match_radar_to_detection(det_pos_ego, radar_data, cat_id,
 def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='cuda'):
     """
     Extract detected features for one sample using camera + radar.
-    V2: Improved mapping, depth estimation, and attribute inference.
     Returns (MAX_OBJECTS, FEAT_DIM) array.
     """
     features = np.zeros((MAX_OBJECTS, FEAT_DIM), dtype=np.float32)
@@ -434,7 +363,7 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
     radar_data = get_all_radar_points_in_ego(nusc, sample, Quaternion)
 
     # ---- Run YOLO on all 6 cameras ----
-    all_detections = []
+    all_detections = []  # list of (cat_id, confidence, pos_ego_3d, vel_matched)
 
     for cam_ch in CAMERA_CHANNELS:
         if cam_ch not in sample['data']:
@@ -481,12 +410,10 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
             x1, y1, x2, y2 = bboxes[j]
             cx_pixel = (x1 + x2) / 2.0
             cy_pixel = (y1 + y2) / 2.0
-            bbox_area_ratio = ((x2 - x1) * (y2 - y1)) / (img_w * img_h)
+            bottom_y = y2
 
-            # Estimate depth (V2: multi-cue)
-            depth = estimate_depth_from_bbox(
-                bboxes[j], img_h, img_w, cam_intrinsic, nusc_cat_id
-            )
+            # Estimate depth
+            depth = estimate_depth_from_bbox(bottom_y, img_h, cam_intrinsic, nusc_cat_id)
 
             # Back-project to ego 3D
             pos_ego = pixel_to_ego_3d(
@@ -495,13 +422,23 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
                 ego_rotation
             )
 
-            # Match with radar for velocity (V2: category-adaptive radius)
-            vx, vy, matched, radar_depth = match_radar_to_detection(
-                pos_ego, radar_data, nusc_cat_id
-            )
+            # Match with radar for velocity
+            vx, vy, matched = match_radar_to_detection(pos_ego, radar_data)
 
             # If radar matched, refine depth with radar range
-            if matched and radar_depth is not None:
+            if matched:
+                radar_pts = radar_data['points_3d']
+                dx = radar_pts[0, :] - pos_ego[0]
+                dy = radar_pts[1, :] - pos_ego[1]
+                dists = np.sqrt(dx**2 + dy**2)
+                min_idx = np.argmin(dists)
+                # Use radar depth (more accurate than camera estimate)
+                radar_depth = np.sqrt(
+                    radar_pts[0, min_idx]**2 +
+                    radar_pts[1, min_idx]**2 +
+                    radar_pts[2, min_idx]**2
+                )
+                # Re-project with refined depth
                 pos_ego = pixel_to_ego_3d(
                     cx_pixel, cy_pixel, radar_depth,
                     cam_intrinsic, cam_rotation_q, cam_translation,
@@ -515,14 +452,13 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
                 'vx': vx,
                 'vy': vy,
                 'radar_matched': matched,
-                'bbox_area_ratio': bbox_area_ratio,
-                'cam_ch': cam_ch,
             })
 
     # ---- Sort by confidence, keep top MAX_OBJECTS ----
     all_detections.sort(key=lambda d: d['conf'], reverse=True)
 
-    # ---- Improved Cross-Camera NMS ----
+    # ---- De-duplicate nearby detections (NMS in 3D) ----
+    # Since multiple cameras can see the same object, merge nearby detections
     kept = []
     for det in all_detections:
         is_dup = False
@@ -530,25 +466,14 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
             dx = det['pos_ego'][0] - prev['pos_ego'][0]
             dy = det['pos_ego'][1] - prev['pos_ego'][1]
             dist = np.sqrt(dx**2 + dy**2)
-
-            # Same category or similar category (both vehicles, etc.)
-            same_cat = (det['cat_id'] == prev['cat_id'])
-            both_vehicles = (det['cat_id'] in {8,9,11,12,13,14,15,16,17} and
-                           prev['cat_id'] in {8,9,11,12,13,14,15,16,17})
-
-            if dist < NMS_3D_RADIUS and (same_cat or both_vehicles):
-                # Duplicate: merge information
-                # Keep position from higher-confidence detection
-                # But absorb radar match from either
+            if dist < 2.0 and det['cat_id'] == prev['cat_id']:
+                # Duplicate: if current has radar match and prev doesn't, replace
                 if det['radar_matched'] and not prev['radar_matched']:
                     prev['vx'] = det['vx']
                     prev['vy'] = det['vy']
                     prev['radar_matched'] = True
-                # Average confidence from multiple views
-                prev['conf'] = max(prev['conf'], det['conf'])
                 is_dup = True
                 break
-
         if not is_dup:
             kept.append(det)
 
@@ -564,10 +489,8 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
         # [0] Category ID
         features[i, 0] = cat_id
 
-        # [1] Attribute (V2: uses context)
-        features[i, 1] = infer_attribute(
-            cat_id, vx, vy, det['bbox_area_ratio'], pos
-        )
+        # [1] Attribute (inferred from velocity)
+        features[i, 1] = infer_attribute(cat_id, vx, vy)
 
         # [2-4] Position (ego frame, normalized)
         features[i, 2] = pos[0] / 50.0
@@ -589,7 +512,7 @@ def extract_sample_features(nusc, sample_token, yolo_model, Quaternion, device='
         if speed > 0.5:
             heading = np.arctan2(vy, vx)
         else:
-            heading = np.arctan2(pos[1], pos[0])
+            heading = np.arctan2(pos[1], pos[0])  # face away from ego
         features[i, 10] = np.sin(heading)
         features[i, 11] = np.cos(heading)
 

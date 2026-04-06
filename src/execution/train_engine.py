@@ -68,9 +68,26 @@ def train_engine(__C, dataset, dataset_eval=None):
 
     # Load checkpoint if resume training
     ckpt_dir = __C.CKPTS_PATH + '/ckpt_' + __C.VERSION
-    if __C.RESUME:
+    if getattr(__C, 'FINETUNE_FROM', None) is not None:
+        path = __C.FINETUNE_FROM
+        print(' ========== Fine-Tuning from:', path)
+        if os.path.exists(path):
+            ckpt = torch.load(path)
+            if __C.N_GPU > 1:
+                net.load_state_dict(ckpt_proc(ckpt['state_dict']))
+            else:
+                net.load_state_dict(ckpt['state_dict'])
+            print('Successfully loaded weights! Initializing fresh optimizer for Epoch 0.')
+        else:
+            print(f'WARNING: Fine-tune checkpoint {path} not found. Starting from scratch.')
+
+        os.makedirs(ckpt_dir, exist_ok=True)
+        optim = get_optim(__C, net, data_size)
+        start_epoch = 0
+
+    elif __C.RESUME:
         print(' ========== Resume training')
-        if __C.CKPT_PATH is not None:
+        if getattr(__C, 'CKPT_PATH', None) is not None:
             print('Warning: Now using CKPT_PATH args, CKPT_VERSION and CKPT_EPOCH will not work')
             path = __C.CKPT_PATH
         elif hasattr(__C, 'CKPT_EPOCH') and __C.CKPT_EPOCH is not None:
