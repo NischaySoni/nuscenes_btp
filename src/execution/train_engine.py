@@ -78,6 +78,14 @@ def train_engine(__C, dataset, dataset_eval=None):
             else:
                 net.load_state_dict(ckpt['state_dict'])
             print('Successfully loaded weights! Initializing fresh optimizer for Epoch 0.')
+            
+            # --- FREEZE REASONING BACKBONE ---
+            if getattr(__C, 'FREEZE_BACKBONE', False):
+                print(' => FREEZING logic backbone mapping (embedding, lstm, backbone). Only training Visual Adapter & Classifier!')
+                for name, param in net.named_parameters():
+                    # We only want to train 'annot_adapter' and 'proj'/'proj_norm' (classifier)
+                    if 'annot_adapter' not in name and 'proj' not in name:
+                        param.requires_grad = False
         else:
             print(f'WARNING: Fine-tune checkpoint {path} not found. Starting from scratch.')
 
