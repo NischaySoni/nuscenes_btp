@@ -165,6 +165,18 @@ class NuScenes_QA(Data.Dataset):
             obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
             bbox_feat = np.zeros((obj_shape[0], 4), dtype=np.float32)
 
+            # --- Knowledge Distillation ---
+            if getattr(self.__C, 'USE_KD', 'False') == 'True' and self.__C.RUN_MODE == 'train':
+                teacher_feat = self._load_feat_safe(scene_token, 'annot', obj_shape)
+                return (
+                    torch.from_numpy(obj_feat),
+                    torch.from_numpy(teacher_feat), # Extra tensor for KD
+                    torch.from_numpy(bbox_feat),
+                    torch.from_numpy(ques_ix),
+                    torch.from_numpy(ans),
+                    torch.tensor(qtype_ix, dtype=torch.long),
+                )
+
             return (
                 torch.from_numpy(obj_feat),
                 torch.from_numpy(bbox_feat),
@@ -180,13 +192,39 @@ class NuScenes_QA(Data.Dataset):
 
     def _load_feat_safe(self, scene_token, feat_type, expected_shape):
         """Load a feature file, zero-padding if missing."""
-        if feat_type == 'bev':
-            path_map = self.stk2bevpath
+        if self.is_fusion:
+            if feat_type == 'bev':
+                path_map = self.stk2bevpath
+            else:
+                path_map = self.stk2yolopath
+            
+            if scene_token in path_map:
+                feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
         else:
-            path_map = self.stk2yolopath
+            # Single or KD Mode
+            if feat_type == 'annot' and getattr(self.__C, 'USE_KD', 'False') == 'True':
+                # Dynamically looking up the KD teacher feature
+                split = self.__C.SPLIT.get(self.__C.RUN_MODE, 'train')
+                
+                # Try path configs first, fallback to base cfgs
+                if hasattr(self.__C, 'FEATS_PATH') and 'annot' in self.__C.FEATS_PATH:
+                    annot_dir = self.__C.FEATS_PATH['annot'][split]
+                else:
+                    annot_dir = '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'
 
-        if scene_token in path_map:
-            feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+                feat_path = os.path.join(annot_dir, f"{scene_token}.npy")
+                if os.path.exists(feat_path):
+                    feat = np.load(feat_path, mmap_mode='r').astype(np.float32)
+                else:
+                    return np.zeros(expected_shape, dtype=np.float32)
+            else:
+                path_map = getattr(self, 'stk2featpath', {})
+                if scene_token in path_map:
+                    feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+                else:
+                    return np.zeros(expected_shape, dtype=np.float32)
+
+        if 'feat' in locals():
 
             if feat_type == 'yolo':
                 # YOLO: per-column normalization, preserving categorical dims

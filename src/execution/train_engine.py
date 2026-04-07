@@ -45,10 +45,36 @@ def train_engine(__C, dataset, dataset_eval=None):
             detection_module.yolo_model.model.eval()
     # -------------------------------------------
 
+    # --- Initialize Teacher Model for KD ---
+    teacher_net = None
+    use_kd = (getattr(__C, 'USE_KD', 'False') == 'True')
+    if use_kd:
+        print(">>> Setting up Knowledge Distillation Teacher Model <<<")
+        teacher_net = ModelLoader(__C).Net(__C, pretrained_emb, token_size, ans_size)
+        teacher_net.cuda()
+        teacher_net.eval()
+        
+        teacher_ckpt_path = getattr(__C, 'TEACHER_CKPT', None)
+        if teacher_ckpt_path and os.path.exists(teacher_ckpt_path):
+            print(f"Loading Teacher Checkpoint from {teacher_ckpt_path}")
+            teacher_ckpt = torch.load(teacher_ckpt_path)
+            if __C.N_GPU > 1:
+                teacher_net.load_state_dict(ckpt_proc(teacher_ckpt['state_dict']))
+            else:
+                teacher_net.load_state_dict(teacher_ckpt['state_dict'])
+        else:
+            print(f"WARNING: Teacher Checkpoint NOT FOUND at {teacher_ckpt_path}! KD will use random teacher.")
+            
+        for param in teacher_net.parameters():
+            param.requires_grad = False
+    # ---------------------------------------
+
     if __C.N_GPU > 1:
         net = nn.DataParallel(net, device_ids=__C.DEVICES)
         if detection_module is not None:
             detection_module = nn.DataParallel(detection_module, device_ids=__C.DEVICES)
+        if teacher_net is not None:
+            teacher_net = nn.DataParallel(teacher_net, device_ids=__C.DEVICES)
 
     # Define Loss Function — with label smoothing for fusion/annot/detected mode
     vis_feat = getattr(__C, 'VISUAL_FEATURE', 'bev')
@@ -182,8 +208,13 @@ def train_engine(__C, dataset, dataset_eval=None):
 
             optim.zero_grad()
 
-            # --- Unpack 5-tuple (new format with question type) ---
-            if len(batch) == 5:
+            # --- Unpack Tensors ---
+            teacher_feat_iter = None
+            if len(batch) == 6:
+                obj_feat_iter, teacher_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter, qtype_iter = batch
+                qtype_iter = qtype_iter.cuda()
+                teacher_feat_iter = teacher_feat_iter.cuda()
+            elif len(batch) == 5:
                 obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter, qtype_iter = batch
                 qtype_iter = qtype_iter.cuda()
             else:
@@ -230,6 +261,23 @@ def train_engine(__C, dataset, dataset_eval=None):
 
                 # Primary Loss (with label smoothing if enabled)
                 loss = loss_fn(loss_item[0], loss_item[1])
+
+                # --- Knowledge Distillation Loss ---
+                if teacher_net is not None and teacher_feat_iter is not None:
+                    # Slice teacher features
+                    sub_teacher_feat_iter = teacher_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
+                    
+                    with torch.no_grad():
+                        teacher_pred = teacher_net(sub_teacher_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
+                    
+                    # KL Divergence Loss: T=2.0
+                    T = 2.0
+                    student_log_probs = F.log_softmax(pred / T, dim=1)
+                    teacher_probs = F.softmax(teacher_pred / T, dim=1)
+                    kd_loss = F.kl_div(student_log_probs, teacher_probs, reduction='sum') * (T * T)
+                    
+                    # Scale down CE and add KD logic (alpha=0.2, beta=0.8)
+                    loss = 0.2 * loss + 0.8 * kd_loss
 
                 # ================================================
                 # CORRECT Count Loss — uses question type, not answer index

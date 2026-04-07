@@ -113,6 +113,15 @@ def parse_args():
                            'Epoch 0 with a fresh optimizer.',
                       type=str)
 
+    parser.add_argument('--USE_KD', dest='USE_KD',
+                      choices=['True', 'False'],
+                      help='True: Use Knowledge Distillation (Teacher-Student).',
+                      type=str)
+
+    parser.add_argument('--TEACHER_CKPT', dest='TEACHER_CKPT',
+                      help='Path to the perfectly trained Teacher checkpoint.',
+                      type=str)
+                      
     parser.add_argument('--ACCU', dest='GRAD_ACCU_STEPS',
                       help='split batch to reduce gpu memory usage',
                       type=int)
