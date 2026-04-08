@@ -1,22 +1,22 @@
 # ------------------------------------------------------------------
-# NuScenes-QA MCAN Model — Ultimate Fusion Architecture (v2)
-# Supports: Single-feature (BEV/YOLO) and Dual-Encoder Fusion
+# NuScenes-QA MCAN Model — RadarXFormer-Inspired Architecture
+# Supports: Single-feature (BEV/YOLO), Dual-Encoder Fusion,
+#           Annotation, Detected, and RadarXFormer (radarxf) modes
 #
-# Key improvements over v1:
-#   1. Separate MCA_ED backbones for BEV and YOLO (no interference)
-#   2. Cross-modal attention between modalities
-#   3. Vector-level gating conditioned on lang+both visuals
-#   4. Separate language representations per modality
-#   5. Improved count head with attention
+# RadarXFormer additions (inspired by 2603.14822v1):
+#   1. RadarXFormerAdapter: dual-stream encoder for structured + CLIP features
+#   2. SpatialPositionalEncoding: 3D position encoding (spherical + Cartesian)
+#   3. Iterative refinement: cross-object attention → re-attend to language
 # ------------------------------------------------------------------
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from src.ops.fc import MLP
 from src.ops.layer_norm import LayerNorm
-from src.models.mcan.mca import MCA_ED, SGA
+from src.models.mcan.mca import MCA_ED, SGA, SA
 
 
 # ------------------------------------------------
@@ -63,16 +63,10 @@ class Adapter(nn.Module):
 # ------------------------------------------------
 
 class YOLOClassAdapter(nn.Module):
-    """
-    Projects YOLO features (13-dim) to hidden_dim AND embeds
-    the class_id (dim 9) through a learnable embedding table.
-    This gives the model semantic identity for each detection.
-    """
 
     def __init__(self, input_dim, hidden_dim, num_classes=80, emb_dim=128):
         super(YOLOClassAdapter, self).__init__()
 
-        # Standard projection for the raw 13-dim features
         self.fc = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(inplace=True),
@@ -80,7 +74,6 @@ class YOLOClassAdapter(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # Learnable class embedding: class_id -> emb_dim -> hidden_dim
         self.class_emb = nn.Embedding(num_classes, emb_dim)
         self.class_proj = nn.Sequential(
             nn.Linear(emb_dim, hidden_dim),
@@ -88,27 +81,13 @@ class YOLOClassAdapter(nn.Module):
         )
 
     def forward(self, feat):
-        """
-        feat: (B, 80, 13) — raw YOLO features
-        dim 9 = class_id (float, 0-79)
-        """
         feat = feat.to(torch.float32)
-
         mask = make_mask(feat)
-
-        # Extract class IDs before projection (dim 9)
-        class_ids = feat[:, :, 9].long().clamp(0, 79)  # (B, 80)
-
-        # Project raw features
-        proj = self.fc(feat)  # (B, 80, hidden_dim)
-
-        # Embed class IDs and add to projection
-        cls_emb = self.class_emb(class_ids)       # (B, 80, emb_dim)
-        cls_proj = self.class_proj(cls_emb)        # (B, 80, hidden_dim)
-
-        # Additive fusion: features + class identity
+        class_ids = feat[:, :, 9].long().clamp(0, 79)
+        proj = self.fc(feat)
+        cls_emb = self.class_emb(class_ids)
+        cls_proj = self.class_proj(cls_emb)
         proj = proj + cls_proj
-
         return proj, mask
 
 
@@ -117,25 +96,15 @@ class YOLOClassAdapter(nn.Module):
 # ------------------------------------------------
 
 class AnnotationAdapter(nn.Module):
-    """
-    Projects structured annotation features (16-dim) to hidden_dim.
-    Embeds category_id (dim 0) and attribute_id (dim 1) through
-    learnable embeddings, then concatenates with continuous features.
-    """
 
     def __init__(self, hidden_dim, num_categories=23, num_attributes=9,
                  cat_emb_dim=64, attr_emb_dim=32):
         super(AnnotationAdapter, self).__init__()
 
-        # Category embedding: 23 NuScenes categories
         self.cat_emb = nn.Embedding(num_categories, cat_emb_dim)
-
-        # Attribute embedding: 9 attributes (0 = none)
         self.attr_emb = nn.Embedding(num_attributes + 1, attr_emb_dim)
 
-        # 14 continuous dims + cat_emb_dim + attr_emb_dim
         total_input = 14 + cat_emb_dim + attr_emb_dim
-
         self.proj = nn.Sequential(
             nn.Linear(total_input, hidden_dim),
             nn.ReLU(inplace=True),
@@ -144,31 +113,191 @@ class AnnotationAdapter(nn.Module):
         )
 
     def forward(self, feat):
+        feat = feat.to(torch.float32)
+        mask = make_mask(feat)
+
+        cat_ids = feat[:, :, 0].long().clamp(0, 22)
+        attr_ids = feat[:, :, 1].long().clamp(0, 8)
+        continuous = feat[:, :, 2:]
+
+        cat_vec = self.cat_emb(cat_ids)
+        attr_vec = self.attr_emb(attr_ids)
+        combined = torch.cat([continuous, cat_vec, attr_vec], dim=-1)
+        proj = self.proj(combined)
+
+        return proj, mask
+
+
+# ================================================
+# RadarXFormer-Inspired Components
+# ================================================
+
+class SpatialPositionalEncoding(nn.Module):
+    """
+    Encodes 3D object positions using both Cartesian and polar coordinates.
+
+    Inspired by RadarXFormer's spherical coordinate representation that
+    preserves spatial structure. We provide both coordinate systems so
+    the model can learn which is more useful for different question types.
+
+    Input features layout (from radarxf features):
+      dims 2-4: (x, y, z) — Cartesian position
+      dims 12-14: (distance, sin_angle, cos_angle) — polar position
+    """
+
+    def __init__(self, hidden_dim, max_obj=100):
+        super(SpatialPositionalEncoding, self).__init__()
+
+        # 6 spatial dims: x, y, z, dist, sin_angle, cos_angle
+        self.pos_proj = nn.Sequential(
+            nn.Linear(6, hidden_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim // 2, hidden_dim),
+        )
+
+        # Learnable position-order embedding (captures object ranking)
+        self.order_emb = nn.Embedding(max_obj, hidden_dim)
+
+    def forward(self, features, projected):
         """
-        feat: (B, N, 16)
-        dim 0 = category_id (0-22)
-        dim 1 = attribute_id (0-8)
-        dims 2-15 = continuous features (pre-normalized)
+        features: (B, N, feat_dim) — raw features with spatial info
+        projected: (B, N, hidden_dim) — already-projected features
+        Returns: (B, N, hidden_dim) — with spatial encoding added
+        """
+        # Extract spatial coordinates from raw features
+        # dims 2-4: x, y, z; dims 12-14: dist, sin_angle, cos_angle
+        spatial = torch.cat([
+            features[:, :, 2:5],    # x, y, z
+            features[:, :, 12:15],  # dist, sin_angle, cos_angle
+        ], dim=-1)  # (B, N, 6)
+
+        pos_enc = self.pos_proj(spatial)  # (B, N, hidden_dim)
+
+        # Add order embedding
+        B, N, _ = projected.shape
+        order_idx = torch.arange(N, device=projected.device).unsqueeze(0).expand(B, -1)
+        order_enc = self.order_emb(order_idx)  # (B, N, hidden_dim)
+
+        return projected + pos_enc + 0.1 * order_enc
+
+
+class RadarXFormerAdapter(nn.Module):
+    """
+    Dual-stream feature adapter for RadarXFormer features (32-dim).
+
+    Inspired by RadarXFormer's separate encoding of radar and image modalities
+    before fusion. Here we separately encode:
+      - Structured features (dims 0-15): category, position, velocity, etc.
+      - Visual features (dims 16-31): CLIP appearance features
+
+    Then fuse them with a learnable modality gate.
+    """
+
+    def __init__(self, hidden_dim, struct_dim=16, visual_dim=16,
+                 num_categories=23, num_attributes=9,
+                 cat_emb_dim=64, attr_emb_dim=32):
+        super(RadarXFormerAdapter, self).__init__()
+
+        self.struct_dim = struct_dim
+        self.visual_dim = visual_dim
+
+        # --- Stream 1: Structured feature encoder ---
+        self.cat_emb = nn.Embedding(num_categories, cat_emb_dim)
+        self.attr_emb = nn.Embedding(num_attributes + 1, attr_emb_dim)
+
+        struct_input_dim = (struct_dim - 2) + cat_emb_dim + attr_emb_dim  # 14 + 64 + 32 = 110
+        self.struct_encoder = nn.Sequential(
+            nn.Linear(struct_input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        # --- Stream 2: Visual (CLIP) feature encoder ---
+        self.visual_encoder = nn.Sequential(
+            nn.Linear(visual_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        # --- Learnable modality gate ---
+        # Decides how much weight to give structured vs visual features
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Sigmoid(),
+        )
+
+        # --- Fusion projection ---
+        self.fusion_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.05),
+        )
+
+    def forward(self, feat):
+        """
+        feat: (B, N, 32)
+        Dims 0-1: categorical (category_id, attribute_id)
+        Dims 2-15: structured continuous
+        Dims 16-31: CLIP visual features
         """
         feat = feat.to(torch.float32)
         mask = make_mask(feat)
 
-        # Extract categorical IDs
-        cat_ids = feat[:, :, 0].long().clamp(0, 22)
-        attr_ids = feat[:, :, 1].long().clamp(0, 8)
-        continuous = feat[:, :, 2:]  # (B, N, 14)
+        # Split into structured and visual
+        struct_feat = feat[:, :, :self.struct_dim]   # (B, N, 16)
+        visual_feat = feat[:, :, self.struct_dim:]   # (B, N, 16)
 
-        # Embed categories and attributes
-        cat_vec = self.cat_emb(cat_ids)       # (B, N, 64)
-        attr_vec = self.attr_emb(attr_ids)    # (B, N, 32)
+        # --- Encode structured features ---
+        cat_ids = struct_feat[:, :, 0].long().clamp(0, 22)
+        attr_ids = struct_feat[:, :, 1].long().clamp(0, 8)
+        continuous = struct_feat[:, :, 2:]  # (B, N, 14)
 
-        # Concatenate all features
-        combined = torch.cat([continuous, cat_vec, attr_vec], dim=-1)
+        cat_vec = self.cat_emb(cat_ids)     # (B, N, 64)
+        attr_vec = self.attr_emb(attr_ids)  # (B, N, 32)
+        struct_combined = torch.cat([continuous, cat_vec, attr_vec], dim=-1)
+        struct_enc = self.struct_encoder(struct_combined)  # (B, N, hidden_dim)
 
-        # Project to hidden dim
-        proj = self.proj(combined)
+        # --- Encode visual (CLIP) features ---
+        visual_enc = self.visual_encoder(visual_feat)  # (B, N, hidden_dim)
 
-        return proj, mask
+        # --- Learnable gate: fuse the two streams ---
+        gate_input = torch.cat([struct_enc, visual_enc], dim=-1)  # (B, N, 2*hidden_dim)
+        gate_weight = self.gate(gate_input)  # (B, N, hidden_dim) — values in [0, 1]
+
+        # Gate: gate_weight * struct + (1-gate_weight) * visual
+        fused = gate_weight * struct_enc + (1.0 - gate_weight) * visual_enc
+
+        # Final projection
+        fused = self.fusion_proj(fused)
+
+        # Store gate mean for diagnostics
+        self._gate_mean = gate_weight.mean().item()
+
+        return fused, mask
+
+
+class CrossObjectAttention(nn.Module):
+    """
+    Self-attention among detected objects in a scene.
+
+    Inspired by RadarXFormer's query self-attention (MHSA, Eq. 5):
+    "queries are fed into a multi-head self-attention layer to enable
+    information exchange among queries."
+
+    This allows the VQA model to reason about inter-object relationships
+    (e.g., "is the car behind the truck?", "how many pedestrians near the bus?")
+    """
+
+    def __init__(self, __C, num_layers=1):
+        super(CrossObjectAttention, self).__init__()
+        self.layers = nn.ModuleList([SA(__C) for _ in range(num_layers)])
+
+    def forward(self, x, x_mask):
+        for layer in self.layers:
+            x = layer(x, x_mask)
+        return x
 
 
 # ------------------------------------------------
@@ -227,35 +356,18 @@ class AttFlat(nn.Module):
 # ------------------------------------------------
 
 class CrossModalAttention(nn.Module):
-    """
-    Bi-directional cross-attention between two modalities.
-    BEV attends to YOLO, YOLO attends to BEV.
-    This enables each modality to gather complementary information.
-    """
 
     def __init__(self, __C, num_layers=2):
         super(CrossModalAttention, self).__init__()
-
-        # BEV attends to YOLO
         self.bev_to_yolo = nn.ModuleList([SGA(__C) for _ in range(num_layers)])
-        # YOLO attends to BEV
         self.yolo_to_bev = nn.ModuleList([SGA(__C) for _ in range(num_layers)])
 
     def forward(self, bev_feat, yolo_feat, bev_mask, yolo_mask):
-        """
-        bev_feat:  (B, N, D)
-        yolo_feat: (B, N, D)
-        Returns: enhanced bev_feat and yolo_feat
-        """
         for sga_b2y, sga_y2b in zip(self.bev_to_yolo, self.yolo_to_bev):
-            # BEV gathers info from YOLO
             bev_enhanced = sga_b2y(bev_feat, yolo_feat, bev_mask, yolo_mask)
-            # YOLO gathers info from BEV
             yolo_enhanced = sga_y2b(yolo_feat, bev_feat, yolo_mask, bev_mask)
-
             bev_feat = bev_enhanced
             yolo_feat = yolo_enhanced
-
         return bev_feat, yolo_feat
 
 
@@ -264,17 +376,10 @@ class CrossModalAttention(nn.Module):
 # ------------------------------------------------
 
 class MLPConcatFusion(nn.Module):
-    """
-    Fuses two independent visual modalities by concatenation
-    and non-linear MLP projection.
-    Input: bev_vec (B, D), yolo_vec (B, D)
-    """
 
     def __init__(self, __C):
         super(MLPConcatFusion, self).__init__()
-
-        D = __C.FLAT_OUT_SIZE  # 1024
-
+        D = __C.FLAT_OUT_SIZE
         self.fuse = nn.Sequential(
             nn.Linear(D * 2, D),
             nn.ReLU(inplace=True),
@@ -283,24 +388,19 @@ class MLPConcatFusion(nn.Module):
         )
 
     def forward(self, bev_vec, yolo_vec):
-        combined = torch.cat([bev_vec, yolo_vec], dim=-1)  # (B, 2D)
+        combined = torch.cat([bev_vec, yolo_vec], dim=-1)
         return self.fuse(combined)
 
 
 # ------------------------------------------------
-# Count Prediction Head (V2)
+# Count Prediction Head
 # ------------------------------------------------
 
 class CountHead(nn.Module):
-    """
-    Predicts count classes 0..10.
-    """
 
     def __init__(self, __C):
         super(CountHead, self).__init__()
-
         D = __C.FLAT_OUT_SIZE
-
         self.count_mlp = nn.Sequential(
             nn.Linear(D * 2, D),
             nn.ReLU(inplace=True),
@@ -308,21 +408,17 @@ class CountHead(nn.Module):
             nn.Linear(D, D // 2),
             nn.ReLU(inplace=True),
             nn.Dropout(__C.DROPOUT_R),
-            nn.Linear(D // 2, 11)   # 11 classes: 0..10
+            nn.Linear(D // 2, 11)
         )
 
     def forward(self, fused_feat, lang_feat):
-        """
-        fused_feat: (B, D)
-        lang_feat:  (B, D)
-        """
-        combined = torch.cat([fused_feat, lang_feat], dim=-1)  # (B, 2D)
+        combined = torch.cat([fused_feat, lang_feat], dim=-1)
         return self.count_mlp(combined)
 
 
-# ------------------------------------------------
-# Main MCAN Model — Ultimate Fusion Architecture
-# ------------------------------------------------
+# ================================================
+# Main MCAN Model
+# ================================================
 
 class Net(nn.Module):
 
@@ -333,15 +429,112 @@ class Net(nn.Module):
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
         self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('annot', 'detected'))
+        self.is_radarxf = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'radarxf')
 
-        # Determine feature dimensions
         bev_dim = __C.FEAT_SIZE['OBJ_FEAT_SIZE'][1]
 
-        if self.is_fusion:
-            yolo_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 13 for YOLO
+        # ================================================
+        # RADARXFORMER MODE
+        # ================================================
+        if self.is_radarxf:
+            feat_dim = bev_dim  # 32 for radarxf features
+            print(f"  [MCAN] RADARXFORMER mode: feat_dim={feat_dim}")
+
+            # --- RadarXFormer dual-stream adapter ---
+            self.radarxf_adapter = RadarXFormerAdapter(
+                __C.HIDDEN_SIZE,
+                struct_dim=16,
+                visual_dim=feat_dim - 16,
+            )
+
+            # --- Spatial positional encoding ---
+            use_spatial_pe = getattr(__C, 'USE_SPATIAL_PE', True)
+            self.use_spatial_pe = use_spatial_pe
+            if use_spatial_pe:
+                self.spatial_pe = SpatialPositionalEncoding(__C.HIDDEN_SIZE)
+                print("  [MCAN] Spatial positional encoding: ENABLED")
+
+            # --- Cross-object self-attention (RadarXFormer query MHSA) ---
+            self.cross_obj_attn = CrossObjectAttention(__C, num_layers=1)
+
+            # --- Primary MCAN backbone ---
+            self.backbone = MCA_ED(__C)
+
+            # --- Iterative refinement (RadarXFormer n-iteration refinement) ---
+            n_refine = getattr(__C, 'REFINEMENT_ITERATIONS', 2)
+            self.n_refine = n_refine
+            if n_refine > 1:
+                self.refine_backbones = nn.ModuleList([
+                    MCA_ED(__C) for _ in range(n_refine - 1)
+                ])
+                self.refine_cross_obj = nn.ModuleList([
+                    CrossObjectAttention(__C, num_layers=1) for _ in range(n_refine - 1)
+                ])
+                print(f"  [MCAN] Iterative refinement: {n_refine} iterations")
+
+            # --- Flatten ---
+            self.attflat_lang = AttFlat(__C)
+            self.attflat_vis = AttFlat(__C)
+
+            # --- Classification ---
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN RadarXF] Total params: {total_params:,}, Trainable: {trainable:,}")
+
+        elif self.is_fusion:
+            yolo_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]
             print(f"  [MCAN] FUSION mode: BEV dim={bev_dim}, YOLO dim={yolo_dim}")
+
+            self.bev_adapter = Adapter(bev_dim, __C.HIDDEN_SIZE)
+            self.yolo_adapter = YOLOClassAdapter(yolo_dim, __C.HIDDEN_SIZE)
+
+            self.backbone_bev = MCA_ED(__C)
+            self.backbone_yolo = MCA_ED(__C)
+
+            cross_layers = getattr(__C, 'CROSS_MODAL_LAYERS', 2)
+            self.cross_modal = CrossModalAttention(__C, num_layers=cross_layers)
+
+            self.attflat_lang_bev = AttFlat(__C)
+            self.attflat_lang_yolo = AttFlat(__C)
+            self.attflat_bev = AttFlat(__C)
+            self.attflat_yolo = AttFlat(__C)
+
+            self.lang_fusion = nn.Sequential(
+                nn.Linear(__C.FLAT_OUT_SIZE * 2, __C.FLAT_OUT_SIZE),
+                nn.ReLU(inplace=True),
+                nn.Dropout(__C.DROPOUT_R),
+            )
+
+            self.fusion_mlp = MLPConcatFusion(__C)
+            self.bev_residual_weight = nn.Parameter(torch.tensor(0.3))
+            self.count_head = CountHead(__C)
+
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN Fusion] Total params: {total_params:,}, Trainable: {trainable:,}")
+
+        elif self.is_annot:
+            feat_dim = bev_dim
+            print(f"  [MCAN] ANNOTATION mode: feat_dim={feat_dim}")
+
+            self.annot_adapter = AnnotationAdapter(__C.HIDDEN_SIZE)
+            self.backbone = MCA_ED(__C)
+            self.attflat_lang = AttFlat(__C)
+            self.attflat_vis = AttFlat(__C)
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN Annot] Total params: {total_params:,}, Trainable: {trainable:,}")
+
         else:
-            # Single-feature mode (backward compatible)
             feat_dim = bev_dim
             if feat_dim == 69:
                 self.img_dim = 64
@@ -360,17 +553,25 @@ class Net(nn.Module):
             print(f"  [MCAN] feat_mode={self.feat_mode}, feat_dim={feat_dim}, "
                   f"img_dim={self.img_dim}, radar_dim={self.radar_dim}")
 
-        # ---------------- Language ----------------
+            self.img_adapter = Adapter(self.img_dim, __C.HIDDEN_SIZE)
+            self.radar_adapter = Adapter(self.radar_expand, __C.HIDDEN_SIZE)
+            self.backbone_img = MCA_ED(__C)
+            self.backbone_radar = MCA_ED(__C)
+            self.attflat_lang = AttFlat(__C)
+            self.attflat_img = AttFlat(__C)
+            self.attflat_radar = AttFlat(__C)
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+        # ---- Language (shared) ----
 
         self.embedding = nn.Embedding(
             num_embeddings=token_size,
             embedding_dim=__C.WORD_EMBED_SIZE
         )
-
         self.embedding.weight.data.copy_(
             torch.from_numpy(pretrained_emb)
         )
-
         self.lstm = nn.LSTM(
             input_size=__C.WORD_EMBED_SIZE,
             hidden_size=__C.HIDDEN_SIZE,
@@ -378,119 +579,22 @@ class Net(nn.Module):
             batch_first=True
         )
 
-        # ================================================
-        # FUSION MODE — ULTIMATE ARCHITECTURE
-        # ================================================
-        if self.is_fusion:
-
-            # --- Visual Adapters ---
-            self.bev_adapter = Adapter(bev_dim, __C.HIDDEN_SIZE)
-            self.yolo_adapter = YOLOClassAdapter(yolo_dim, __C.HIDDEN_SIZE)
-
-            # --- SEPARATE MCAN backbones (key fix: no shared weights) ---
-            self.backbone_bev = MCA_ED(__C)
-            self.backbone_yolo = MCA_ED(__C)
-
-            # --- Cross-Modal Attention ---
-            cross_layers = getattr(__C, 'CROSS_MODAL_LAYERS', 2)
-            self.cross_modal = CrossModalAttention(__C, num_layers=cross_layers)
-
-            # --- Separate Flatten layers ---
-            self.attflat_lang_bev = AttFlat(__C)
-            self.attflat_lang_yolo = AttFlat(__C)
-            self.attflat_bev = AttFlat(__C)
-            self.attflat_yolo = AttFlat(__C)
-
-            # --- Language fusion (concat + project instead of averaging) ---
-            self.lang_fusion = nn.Sequential(
-                nn.Linear(__C.FLAT_OUT_SIZE * 2, __C.FLAT_OUT_SIZE),
-                nn.ReLU(inplace=True),
-                nn.Dropout(__C.DROPOUT_R),
-            )
-
-            # --- MLP Fusion (Replaces Element-Wise Gate) ---
-            self.fusion_mlp = MLPConcatFusion(__C)
-
-            # --- BEV residual weight (learnable, init 0.3) ---
-            self.bev_residual_weight = nn.Parameter(torch.tensor(0.3))
-
-            # --- Count head (improved) ---
-            self.count_head = CountHead(__C)
-
-            # --- Classification head ---
-            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
-
-            # Print parameter count
-            total_params = sum(p.numel() for p in self.parameters())
-            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-            print(f"  [MCAN Fusion] Total params: {total_params:,}, Trainable: {trainable:,}")
-
-        # ================================================
-        # ANNOTATION MODE — Simple, effective
-        # ================================================
-        elif self.is_annot:
-
-            feat_dim = bev_dim  # 16 for annotation features
-            print(f"  [MCAN] ANNOTATION mode: feat_dim={feat_dim}")
-
-            # --- Annotation adapter (embeds category + attribute) ---
-            self.annot_adapter = AnnotationAdapter(__C.HIDDEN_SIZE)
-
-            # --- Single MCAN backbone ---
-            self.backbone = MCA_ED(__C)
-
-            # --- Flatten ---
-            self.attflat_lang = AttFlat(__C)
-            self.attflat_vis = AttFlat(__C)
-
-            # --- Classification ---
-            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
-
-            total_params = sum(p.numel() for p in self.parameters())
-            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-            print(f"  [MCAN Annot] Total params: {total_params:,}, Trainable: {trainable:,}")
-
-        # ================================================
-        # SINGLE-FEATURE MODE (backward compatible)
-        # ================================================
-        else:
-
-            self.img_adapter = Adapter(self.img_dim, __C.HIDDEN_SIZE)
-            self.radar_adapter = Adapter(self.radar_expand, __C.HIDDEN_SIZE)
-
-            self.backbone_img = MCA_ED(__C)
-            self.backbone_radar = MCA_ED(__C)
-
-            self.attflat_lang = AttFlat(__C)
-            self.attflat_img = AttFlat(__C)
-            self.attflat_radar = AttFlat(__C)
-
-            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
-
 
     def forward(self, obj_feat, bbox_feat, ques_ix):
         """
-        Fusion mode:
-            obj_feat  : (B, 80, 69) BEV features
-            bbox_feat : (B, 80, 13) YOLO features
-        Single mode:
-            obj_feat  : (B, 80, feat_dim) visual features
-            bbox_feat : (B, 80, 4) dummy / unused
-        ques_ix       : (B, T) question token indices
+        obj_feat  : (B, N, feat_dim) visual features
+        bbox_feat : (B, N, ?) secondary features or dummy
+        ques_ix   : (B, T) question token indices
         """
 
-        # ------------------------------------------------
-        # Language (shared for both modes)
-        # ------------------------------------------------
-
+        # ---- Language ----
         lang_mask = make_mask(ques_ix.unsqueeze(2))
         lang_feat = self.embedding(ques_ix)
         lang_feat, _ = self.lstm(lang_feat)
 
-        if self.is_fusion:
+        if self.is_radarxf:
+            return self._forward_radarxf(obj_feat, lang_feat, lang_mask)
+        elif self.is_fusion:
             return self._forward_fusion(obj_feat, bbox_feat, lang_feat, lang_mask)
         elif self.is_annot:
             return self._forward_annot(obj_feat, lang_feat, lang_mask)
@@ -498,92 +602,96 @@ class Net(nn.Module):
             return self._forward_single(obj_feat, lang_feat, lang_mask)
 
 
+    def _forward_radarxf(self, radarxf_feat, lang_feat, lang_mask):
+        """
+        RadarXFormer-inspired forward path.
+
+        Architecture (inspired by RadarXFormer Fig. 1 & Fig. 4):
+          1. Dual-stream adapter: encode structured + visual features separately, fuse with gate
+          2. Spatial positional encoding: add 3D position information
+          3. Cross-object self-attention: objects exchange information (like query MHSA)
+          4. MCAN co-attention: language ↔ visual
+          5. [Optional] Iterative refinement: repeat steps 3-4
+          6. Flatten + classify
+        """
+
+        # ---- Step 1: Dual-stream feature adaptation ----
+        vis_proj, vis_mask = self.radarxf_adapter(radarxf_feat)  # (B, N, hidden)
+
+        # ---- Step 2: Spatial positional encoding ----
+        if self.use_spatial_pe:
+            vis_proj = self.spatial_pe(radarxf_feat, vis_proj)
+
+        # ---- Step 3: Cross-object self-attention ----
+        vis_proj = self.cross_obj_attn(vis_proj, vis_mask)
+
+        # ---- Step 4: MCAN co-attention (language ↔ visual) ----
+        lang_out, vis_out = self.backbone(
+            lang_feat, vis_proj, lang_mask, vis_mask
+        )
+
+        # ---- Step 5: Iterative refinement ----
+        if self.n_refine > 1:
+            for i in range(self.n_refine - 1):
+                # Re-apply cross-object attention
+                vis_out = self.refine_cross_obj[i](vis_out, vis_mask)
+                # Re-attend to language
+                lang_out, vis_out = self.refine_backbones[i](
+                    lang_out, vis_out, lang_mask, vis_mask
+                )
+
+        # ---- Step 6: Flatten ----
+        lang_vec = self.attflat_lang(lang_out, lang_mask)
+        vis_vec = self.attflat_vis(vis_out, vis_mask)
+
+        # ---- Step 7: Classify ----
+        proj_feat = lang_vec + vis_vec
+        proj_feat = self.proj_norm(proj_feat)
+        logits = self.proj(proj_feat)
+
+        # Dummy values for training engine compatibility
+        self._count_logits = None
+        self._fusion_gate_mean = self.radarxf_adapter._gate_mean if hasattr(self.radarxf_adapter, '_gate_mean') else 0.5
+
+        return logits
+
+
     def _forward_fusion(self, bev_feat, yolo_feat, lang_feat, lang_mask):
         """Ultimate dual-encoder fusion path."""
 
-        # ------------------------------------------------
-        # Adapt features (richer 2-layer projection)
-        # ------------------------------------------------
-
-        bev_proj, bev_mask = self.bev_adapter(bev_feat)      # (B, 80, 512)
-        yolo_proj, yolo_mask = self.yolo_adapter(yolo_feat)  # (B, 80, 512)
-
-        # ------------------------------------------------
-        # SEPARATE MCAN co-attention for BEV
-        # (dedicated backbone — no interference with YOLO)
-        # ------------------------------------------------
+        bev_proj, bev_mask = self.bev_adapter(bev_feat)
+        yolo_proj, yolo_mask = self.yolo_adapter(yolo_feat)
 
         lang_bev, bev_out = self.backbone_bev(
-            lang_feat.clone(),
-            bev_proj,
-            lang_mask,
-            bev_mask
+            lang_feat.clone(), bev_proj, lang_mask, bev_mask
         )
-
-        # ------------------------------------------------
-        # SEPARATE MCAN co-attention for YOLO
-        # (dedicated backbone — no interference with BEV)
-        # ------------------------------------------------
-
         lang_yolo, yolo_out = self.backbone_yolo(
-            lang_feat.clone(),
-            yolo_proj,
-            lang_mask,
-            yolo_mask
+            lang_feat.clone(), yolo_proj, lang_mask, yolo_mask
         )
-
-        # ------------------------------------------------
-        # Cross-Modal Attention
-        # BEV and YOLO exchange information
-        # ------------------------------------------------
 
         bev_out, yolo_out = self.cross_modal(
-            bev_out, yolo_out,
-            bev_mask, yolo_mask
+            bev_out, yolo_out, bev_mask, yolo_mask
         )
 
-        # ------------------------------------------------
-        # Flatten — separate paths for each modality
-        # ------------------------------------------------
-
-        lang_bev_vec = self.attflat_lang_bev(lang_bev, lang_mask)    # (B, 1024)
-        lang_yolo_vec = self.attflat_lang_yolo(lang_yolo, lang_mask) # (B, 1024)
-
-        bev_vec = self.attflat_bev(bev_out, bev_mask)    # (B, 1024)
-        yolo_vec = self.attflat_yolo(yolo_out, yolo_mask) # (B, 1024)
-
-        # ------------------------------------------------
-        # Language Fusion (concat + project, not avg)
-        # ------------------------------------------------
+        lang_bev_vec = self.attflat_lang_bev(lang_bev, lang_mask)
+        lang_yolo_vec = self.attflat_lang_yolo(lang_yolo, lang_mask)
+        bev_vec = self.attflat_bev(bev_out, bev_mask)
+        yolo_vec = self.attflat_yolo(yolo_out, yolo_mask)
 
         lang_vec = self.lang_fusion(
             torch.cat([lang_bev_vec, lang_yolo_vec], dim=-1)
-        )  # (B, 1024)
-
-        # ------------------------------------------------
-        # Late Fusion: MLP instead of Element-Wise Gating
-        # ------------------------------------------------
+        )
 
         fused_visual = self.fusion_mlp(bev_vec, yolo_vec)
-
-        # ------------------------------------------------
-        # Classify (with BEV residual)
-        # ------------------------------------------------
 
         bev_residual = self.bev_residual_weight * bev_vec
         proj_feat = lang_vec + fused_visual + bev_residual
         proj_feat = self.proj_norm(proj_feat)
         logits = self.proj(proj_feat)
 
-        # ------------------------------------------------
-        # Count head (auxiliary output)
-        # ------------------------------------------------
-
         count_logits = self.count_head(fused_visual, lang_vec)
-
-        # Store for the training engine to use
         self._count_logits = count_logits
-        self._fusion_gate_mean = 0.5  # dummy for diagnostics
+        self._fusion_gate_mean = 0.5
 
         return logits
 
@@ -591,39 +699,19 @@ class Net(nn.Module):
     def _forward_annot(self, annot_feat, lang_feat, lang_mask):
         """Annotation-based path: simple, effective."""
 
-        # ------------------------------------------------
-        # Adapt annotation features (embed category + attribute)
-        # ------------------------------------------------
-
-        vis_proj, vis_mask = self.annot_adapter(annot_feat)  # (B, N, hidden)
-
-        # ------------------------------------------------
-        # MCAN co-attention: language ↔ visual
-        # ------------------------------------------------
+        vis_proj, vis_mask = self.annot_adapter(annot_feat)
 
         lang_out, vis_out = self.backbone(
-            lang_feat,
-            vis_proj,
-            lang_mask,
-            vis_mask
+            lang_feat, vis_proj, lang_mask, vis_mask
         )
 
-        # ------------------------------------------------
-        # Flatten
-        # ------------------------------------------------
-
-        lang_vec = self.attflat_lang(lang_out, lang_mask)  # (B, FLAT_OUT_SIZE)
-        vis_vec = self.attflat_vis(vis_out, vis_mask)       # (B, FLAT_OUT_SIZE)
-
-        # ------------------------------------------------
-        # Classify
-        # ------------------------------------------------
+        lang_vec = self.attflat_lang(lang_out, lang_mask)
+        vis_vec = self.attflat_vis(vis_out, vis_mask)
 
         proj_feat = lang_vec + vis_vec
         proj_feat = self.proj_norm(proj_feat)
         logits = self.proj(proj_feat)
 
-        # Dummy values for training engine compatibility
         self._count_logits = None
         self._fusion_gate_mean = 0.0
 
@@ -633,47 +721,33 @@ class Net(nn.Module):
     def _forward_single(self, obj_feat, lang_feat, lang_mask):
         """Single-feature path (backward compatible with BEV/YOLO only)."""
 
-        # Split Image + Radar
         img_feat = obj_feat[:, :, :self.img_dim]
         radar_feat = obj_feat[:, :, self.img_dim:]
 
-        # Radar confidence weighting on image features
         radar_conf = radar_feat[:, :, -1].unsqueeze(-1)
         img_feat = img_feat * (1 + radar_conf)
 
-        # Expand radar to target dimension via repeat
         if self.radar_dim < self.radar_expand:
             repeat_factor = (self.radar_expand // self.radar_dim) + 1
             radar_feat = radar_feat.repeat(1, 1, repeat_factor)[:, :, :self.radar_expand]
 
         radar_feat = radar_feat / (torch.norm(radar_feat, dim=-1, keepdim=True) + 1e-6)
 
-        # Visual adapters
         img_feat, img_mask = self.img_adapter(img_feat)
         radar_feat, radar_mask = self.radar_adapter(radar_feat)
 
-        # MCAN for Image
         lang_img, img_feat = self.backbone_img(
-            lang_feat,
-            img_feat,
-            lang_mask,
-            img_mask
+            lang_feat, img_feat, lang_mask, img_mask
         )
 
-        # MCAN for Radar
         lang_rad, radar_feat = self.backbone_radar(
-            lang_feat,
-            radar_feat,
-            lang_mask,
-            radar_mask
+            lang_feat, radar_feat, lang_mask, radar_mask
         )
 
-        # Flatten
         lang_vec = self.attflat_lang(lang_feat, lang_mask)
         img_vec = self.attflat_img(img_feat, img_mask)
         radar_vec = self.attflat_radar(radar_feat, radar_mask)
 
-        # Late Fusion
         proj_feat = lang_vec + img_vec + 0.1 * radar_vec
 
         presence = radar_feat[:, :, 0].sum(dim=1, keepdim=True)

@@ -48,7 +48,7 @@ class NuScenes_QA(Data.Dataset):
         # ---- Feature paths ----
         # --------------------------
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
-        self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected'))
+        self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected', 'radarxf'))
 
         if self.is_fusion:
             # Fusion mode: load from both BEV and YOLO directories
@@ -190,6 +190,10 @@ class NuScenes_QA(Data.Dataset):
     # dim 9 = class_id (0-79 COCO class), dim 12 = radar_match (0/1 flag)
     YOLO_CATEGORICAL_DIMS = {9, 12}
 
+    # RadarXFormer feature layout constants
+    RADARXF_STRUCT_DIM = 16
+    RADARXF_CATEGORICAL_DIMS = {0, 1}  # category_id, attribute_id
+
     def _load_feat_safe(self, scene_token, feat_type, expected_shape):
         """Load a feature file, zero-padding if missing."""
         if self.is_fusion:
@@ -228,23 +232,35 @@ class NuScenes_QA(Data.Dataset):
 
             if feat_type == 'yolo':
                 # YOLO: per-column normalization, preserving categorical dims
-                # Each column has different semantics/scales (coords 0-1,
-                # confidence 0-1, class_id 0-79, radar velocity etc.)
                 for col in range(feat.shape[1]):
                     if col in self.YOLO_CATEGORICAL_DIMS:
-                        continue  # keep class_id and radar_match raw
+                        continue
                     col_data = feat[:, col]
                     col_std = col_data.std()
                     if col_std > 1e-6:
                         feat[:, col] = (col_data - col_data.mean()) / col_std
-                    # else: column is constant (all zeros), leave as-is
 
-                # Clamp only continuous dims
                 for col in range(feat.shape[1]):
                     if col not in self.YOLO_CATEGORICAL_DIMS:
                         feat[:, col] = np.clip(feat[:, col], -5.0, 5.0)
+
+            elif self.__C.VISUAL_FEATURE == 'radarxf':
+                # RadarXFormer: separate normalization for structured vs CLIP dims
+                # Dims 0-1 (categorical): keep raw
+                # Dims 2-15 (structured continuous): already normalized in extraction
+                # Dims 16-31 (CLIP PCA features): standardize per-sample
+                struct_dim = self.RADARXF_STRUCT_DIM
+
+                # Standardize CLIP features (dims 16+)
+                if feat.shape[1] > struct_dim:
+                    clip_part = feat[:, struct_dim:]
+                    clip_std = clip_part.std()
+                    if clip_std > 1e-6:
+                        feat[:, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
+                    feat[:, struct_dim:] = np.clip(feat[:, struct_dim:], -5.0, 5.0)
+
             else:
-                # BEV: global z-score normalization (unchanged)
+                # BEV / annot / detected: global z-score normalization
                 feat = (feat - feat.mean()) / (feat.std() + 1e-6)
                 feat = np.clip(feat, -5.0, 5.0)
 
@@ -297,10 +313,19 @@ class NuScenes_QA(Data.Dataset):
         obj_feat = np.load(feat_path, mmap_mode='r').astype(np.float32)
 
         if self.is_annot:
-            # Annotation features are PRE-NORMALIZED in extraction script
-            # Dims 0-1 are categorical (category_id, attribute_id) — keep raw
-            # Dims 2-15 are already scaled to ~[-1, 1] range
-            pass
+            if self.__C.VISUAL_FEATURE == 'radarxf':
+                # RadarXFormer features: structured dims are pre-normalized,
+                # CLIP dims need per-sample standardization
+                struct_dim = self.RADARXF_STRUCT_DIM
+                if obj_feat.shape[1] > struct_dim:
+                    clip_part = obj_feat[:, struct_dim:]
+                    clip_std = clip_part.std()
+                    if clip_std > 1e-6:
+                        obj_feat[:, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
+                    obj_feat[:, struct_dim:] = np.clip(obj_feat[:, struct_dim:], -5.0, 5.0)
+            else:
+                # Annotation/Detected features are PRE-NORMALIZED in extraction script
+                pass
         else:
             # BEV/YOLO: global z-score normalization
             obj_feat = (obj_feat - obj_feat.mean()) / (obj_feat.std() + 1e-6)
