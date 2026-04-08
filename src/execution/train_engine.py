@@ -100,9 +100,9 @@ def train_engine(__C, dataset, dataset_eval=None):
         if os.path.exists(path):
             ckpt = torch.load(path)
             if __C.N_GPU > 1:
-                net.load_state_dict(ckpt_proc(ckpt['state_dict']))
+                net.load_state_dict(ckpt_proc(ckpt['state_dict']), strict=False)
             else:
-                net.load_state_dict(ckpt['state_dict'])
+                net.load_state_dict(ckpt['state_dict'], strict=False)
             print('Successfully loaded weights! Initializing fresh optimizer for Epoch 0.')
             
             # --- FREEZE REASONING BACKBONE ---

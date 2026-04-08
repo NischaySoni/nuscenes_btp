@@ -1,8 +1,7 @@
 # ---------------------------------------------------------------
-# Fine-Tuning VQA Config
+# Detected VQA Config (from-scratch training)
 # ---------------------------------------------------------------
-# Used exclusively for fine-tuning a pre-trained annot_v1 model
-# on detected features. Prevents catastrophic forgetting.
+# For training VQA on detected features (Camera+Radar)
 
 MODEL_USE: mcan
 VISUAL_FEATURE: detected
@@ -11,7 +10,7 @@ VISUAL_FEATURE: detected
 OBJ_FEAT_SIZE: [100, 16]
 BBOX_FEAT_SIZE: [100, 4]
 
-# Architecture (Must perfectly match annot_v1)
+# Architecture (matches annot_v1 for weight compatibility)
 LAYER: 3
 HIDDEN_SIZE: 256
 BBOXFEAT_EMB_SIZE: 256
@@ -24,14 +23,12 @@ FLAT_OUT_SIZE: 512
 USE_BBOX_FEAT: False
 BBOX_NORMALIZE: False
 
-# --- FINE-TUNING RECIPE ---
+# --- TRAINING RECIPE ---
 BATCH_SIZE: 32
-# Drastically smaller learning rate to protect pre-trained weights
-LR_BASE: 0.00015  
-# No warmup (warmup spikes the LR and destroys pre-trained weights)
+LR_BASE: 0.0001
 WARMUP_EPOCH: 3
 LR_DECAY_R: 0.2
-LR_DECAY_LIST: [5, 10]
+LR_DECAY_LIST: [8, 14]
 MAX_EPOCH: 20
 EARLY_STOP_PATIENCE: 10
 GRAD_NORM_CLIP: 0.5
@@ -41,7 +38,7 @@ LOSS_REDUCTION: sum
 OPT: Adam
 OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0005'}
 
-LABEL_SMOOTHING: 0.25
+LABEL_SMOOTHING: 0.1
 COUNT_LOSS_WEIGHT: 0.0
 CROSS_MODAL_LAYERS: 0
 USE_YOLO_DETECTION: False
