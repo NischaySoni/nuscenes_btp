@@ -573,11 +573,17 @@ class Net(nn.Module):
           6. Flatten + classify
         """
 
-        # ---- Baseline-proven stable architecture ----
         vis_proj, vis_mask = self.radarxf_adapter(radarxf_feat)  # (B, N, hidden)
 
-        # The MCAN backbone internally handles Cross-Object Attention via Decoder Self-Attention
-        # We pass it directly without stacking additional overlapping layers to preserve gradients
+        if getattr(self.__C, 'USE_SPATIAL_PE', True) and hasattr(self, 'spatial_pe'):
+            vis_proj = self.spatial_pe(radarxf_feat, vis_proj)
+
+        # 3. Allow objects to communicate spatially via cross-attention
+        if hasattr(self, 'cross_obj_attn') and self.cross_obj_attn is not None:
+            # CrossObjectAttention internals automatically run REFINEMENT_ITERATIONS loops
+            cross_out = self.cross_obj_attn(vis_proj, vis_mask)
+            vis_proj = vis_proj + 0.1 * cross_out  # Damped residual to prevent explosion
+
         lang_out, vis_out = self.backbone(
             lang_feat, vis_proj, lang_mask, vis_mask
         )
