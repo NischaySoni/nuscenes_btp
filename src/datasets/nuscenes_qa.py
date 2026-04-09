@@ -245,19 +245,12 @@ class NuScenes_QA(Data.Dataset):
                         feat[:, col] = np.clip(feat[:, col], -5.0, 5.0)
 
             elif self.__C.VISUAL_FEATURE == 'radarxf':
-                # RadarXFormer: separate normalization for structured vs CLIP dims
+                # RadarXFormer: features are pre-normalized at extraction time (both structured and CLIP)
+                # We just need to ensure padding slots remain strictly zero
                 struct_dim = self.RADARXF_STRUCT_DIM
 
-                # Identify valid rows to preserve the zero-masking for empty slots!
+                # Identify valid rows
                 valid_mask = np.abs(feat[:, :struct_dim]).sum(axis=1) > 0
-
-                # Standardize CLIP features (dims 16+) ONLY for valid rows
-                if valid_mask.any() and feat.shape[1] > struct_dim:
-                    clip_part = feat[valid_mask, struct_dim:]
-                    clip_std = clip_part.std()
-                    if clip_std > 1e-6:
-                        feat[valid_mask, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
-                    feat[valid_mask, struct_dim:] = np.clip(feat[valid_mask, struct_dim:], -5.0, 5.0)
 
                 # Ensure empty padding slots remain STRICTLY ZERO to keep attention masks working
                 feat[~valid_mask, :] = 0.0

@@ -45,8 +45,8 @@ class PATH:
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features',
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features'},
             'radarxf': {
-                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features',
-                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features'},
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'},
         }
         self.VISUAL_FEATURE = 'bev'
 

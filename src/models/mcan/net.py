@@ -394,10 +394,10 @@ class Net(nn.Module):
         # RADARXFORMER MODE
         # ================================================
         if self.is_radarxf:
-            feat_dim = bev_dim  # 32 for radarxf features
+            feat_dim = bev_dim  # 48 for radarxf v2 features
             print(f"  [MCAN] RADARXFORMER mode: feat_dim={feat_dim}")
 
-            # --- RadarXFormer dual-stream adapter ---
+            # --- RadarXFormer adapter (same architecture as AnnotationAdapter) ---
             self.radarxf_adapter = RadarXFormerAdapter(
                 __C,
                 __C.HIDDEN_SIZE,
@@ -405,30 +405,8 @@ class Net(nn.Module):
                 visual_dim=feat_dim - 16,
             )
 
-            # --- Spatial positional encoding ---
-            use_spatial_pe = getattr(__C, 'USE_SPATIAL_PE', True)
-            self.use_spatial_pe = use_spatial_pe
-            if use_spatial_pe:
-                self.spatial_pe = SpatialPositionalEncoding(__C.HIDDEN_SIZE)
-                print("  [MCAN] Spatial positional encoding: ENABLED")
-
-            # --- Cross-object self-attention (RadarXFormer query MHSA) ---
-            self.cross_obj_attn = CrossObjectAttention(__C, num_layers=1)
-
-            # --- Primary MCAN backbone ---
+            # --- Primary MCAN backbone (same as annotation model) ---
             self.backbone = MCA_ED(__C)
-
-            # --- Iterative refinement (RadarXFormer n-iteration refinement) ---
-            n_refine = getattr(__C, 'REFINEMENT_ITERATIONS', 2)
-            self.n_refine = n_refine
-            if n_refine > 1:
-                self.refine_backbones = nn.ModuleList([
-                    MCA_ED(__C) for _ in range(n_refine - 1)
-                ])
-                self.refine_cross_obj = nn.ModuleList([
-                    CrossObjectAttention(__C, num_layers=1) for _ in range(n_refine - 1)
-                ])
-                print(f"  [MCAN] Iterative refinement: {n_refine} iterations")
 
             # --- Flatten ---
             self.attflat_lang = AttFlat(__C)
@@ -563,26 +541,10 @@ class Net(nn.Module):
     def _forward_radarxf(self, radarxf_feat, lang_feat, lang_mask):
         """
         RadarXFormer-inspired forward path.
-
-        Architecture (inspired by RadarXFormer Fig. 1 & Fig. 4):
-          1. Dual-stream adapter: encode structured + visual features separately, fuse with gate
-          2. Spatial positional encoding: add 3D position information
-          3. Cross-object self-attention: objects exchange information (like query MHSA)
-          4. MCAN co-attention: language ↔ visual
-          5. [Optional] Iterative refinement: repeat steps 3-4
-          6. Flatten + classify
+        Simplified to match the proven Annotation model architecture.
         """
 
-        vis_proj, vis_mask = self.radarxf_adapter(radarxf_feat)  # (B, N, hidden)
-
-        if getattr(self.__C, 'USE_SPATIAL_PE', True) and hasattr(self, 'spatial_pe'):
-            vis_proj = self.spatial_pe(radarxf_feat, vis_proj)
-
-        # 3. Allow objects to communicate spatially via cross-attention
-        if hasattr(self, 'cross_obj_attn') and self.cross_obj_attn is not None:
-            # CrossObjectAttention internals automatically run REFINEMENT_ITERATIONS loops
-            cross_out = self.cross_obj_attn(vis_proj, vis_mask)
-            vis_proj = vis_proj + 0.1 * cross_out  # Damped residual to prevent explosion
+        vis_proj, vis_mask = self.radarxf_adapter(radarxf_feat)
 
         lang_out, vis_out = self.backbone(
             lang_feat, vis_proj, lang_mask, vis_mask

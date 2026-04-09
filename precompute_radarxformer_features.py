@@ -47,14 +47,14 @@ warnings.filterwarnings("ignore")
 
 DATA_ROOT = "/media/nas_mount/anwar2/experiment/dataset/nuscenes"
 VERSION = "v1.0-trainval"
-OUT_DIR = "/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features"
+OUT_DIR = "/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2"
 YOLO_MODEL = "yolov8m.pt"
-CONF_THRESHOLD = 0.25          # Slightly lower than detected_features (0.3) to catch more objects
+CONF_THRESHOLD = 0.15          # Lower threshold to catch small objects (cones, barriers)
 MAX_OBJECTS = 100
 STRUCT_DIM = 16                # Structured feature dimensions
 CLIP_RAW_DIM = 512             # CLIP ViT-B/32 output dimension
-CLIP_PCA_DIM = 16              # PCA-compressed CLIP dimension
-FEAT_DIM = STRUCT_DIM + CLIP_PCA_DIM  # 32 total
+CLIP_PCA_DIM = 32              # PCA-compressed CLIP dimension (doubled for richer features)
+FEAT_DIM = STRUCT_DIM + CLIP_PCA_DIM  # 48 total
 
 # Radar aggregation parameters (inspired by RadarXFormer's deformable attention)
 RADAR_SEARCH_RADIUS = 5.0      # meters — wider than detected_features (3.0)
@@ -72,7 +72,7 @@ RADAR_CHANNELS = [
 ]
 
 # PCA model path
-PCA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "clip_pca_model.pkl")
+PCA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "clip_pca_model_v2.pkl")
 
 
 # ============================================================
@@ -80,14 +80,30 @@ PCA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "clip_pca_model.pkl")
 # ============================================================
 
 COCO_TO_NUSCENES = {
+    # === Core vehicle/pedestrian categories (high confidence) ===
     0:  (0, False),    # person → pedestrian.adult
     1:  (10, False),   # bicycle → vehicle.bicycle
     2:  (8, True),     # car → vehicle.car
     3:  (9, True),     # motorcycle → vehicle.motorcycle
     5:  (12, True),    # bus → vehicle.bus.rigid
     7:  (13, True),    # truck → vehicle.truck
+    # === Animals ===
+    15: (7, False),    # cat → animal
     16: (7, False),    # dog → animal
+    17: (7, False),    # horse → animal
+    # === Construction & emergency vehicles ===
     8:  (14, True),    # boat → vehicle.construction (approximate)
+    # === Road objects (critical for exist/count questions) ===
+    9:  (19, False),   # traffic light → trafficcone (road furniture)
+    10: (18, False),   # fire hydrant → barrier (road obstacle)
+    11: (19, False),   # stop sign → trafficcone (road sign)
+    13: (20, False),   # bench → pushable_pullable (street furniture)
+    # === Movable objects ===
+    24: (20, False),   # backpack → pushable_pullable
+    25: (20, False),   # umbrella → pushable_pullable
+    28: (20, False),   # suitcase → pushable_pullable
+    56: (20, False),   # chair → pushable_pullable
+    62: (21, False),   # tv → debris (approximate)
 }
 VALID_COCO_IDS = set(COCO_TO_NUSCENES.keys())
 
@@ -102,6 +118,10 @@ NUSCENES_CATEGORY_PROMPTS = {
     12: "a bus",
     13: "a truck",
     14: "a construction vehicle",
+    18: "a road barrier or guardrail",
+    19: "a traffic cone or road sign",
+    20: "a movable object on the road",
+    21: "debris or scattered objects on the road",
 }
 
 # Size priors (width, length, height in meters)
@@ -709,12 +729,16 @@ def extract_sample_features(nusc, sample_token, yolo_model, clip_extractor,
         multiview_bonus = 0.05 * min(det.get('_num_views', 1) - 1, 3)
         features[i, 15] = min(1.0, det['conf'] + radar_bonus + multiview_bonus)
 
-        # --- Dims 16-31: CLIP visual features (PCA-compressed) ---
+        # --- Dims 16-47: CLIP visual features (PCA-compressed + normalized) ---
 
         clip_feat = det.get('clip_feature')
         if clip_feat is not None and pca_model is not None:
-            # PCA compress: 512 → 16
-            clip_compressed = pca_model.transform(clip_feat.reshape(1, -1))[0]
+            pca = pca_model['pca'] if isinstance(pca_model, dict) else pca_model
+            clip_compressed = pca.transform(clip_feat.reshape(1, -1))[0]
+            # Pre-normalize using dataset-wide stats
+            if isinstance(pca_model, dict) and 'clip_mean' in pca_model:
+                clip_compressed = (clip_compressed - pca_model['clip_mean']) / pca_model['clip_std']
+                clip_compressed = np.clip(clip_compressed, -3.0, 3.0)  # prevent outliers
             features[i, STRUCT_DIM:STRUCT_DIM + CLIP_PCA_DIM] = clip_compressed.astype(np.float32)
 
     return features
@@ -725,14 +749,16 @@ def extract_sample_features(nusc, sample_token, yolo_model, clip_extractor,
 # ============================================================
 
 def fit_pca(nusc, yolo_model, clip_extractor, Quaternion, device='cuda',
-            n_samples=200, n_components=CLIP_PCA_DIM):
+            n_samples=850, n_components=CLIP_PCA_DIM):
     """
-    Fit PCA on CLIP features from a subset of samples.
-    Saves the PCA model for later use.
+    Fit PCA on CLIP features from ALL scenes and ALL 6 cameras.
+    Also computes and saves per-component normalization stats (mean, std)
+    so CLIP features can be pre-normalized at extraction time.
     """
     from sklearn.decomposition import PCA
 
-    print(f"\n=== Fitting PCA on {n_samples} samples ===")
+    n_samples = min(n_samples, len(nusc.scene))
+    print(f"\n=== Fitting PCA on {n_samples} scenes, ALL 6 cameras ===")
 
     all_clip_features = []
     sample_tokens = [s['first_sample_token'] for s in nusc.scene[:n_samples]]
@@ -740,7 +766,7 @@ def fit_pca(nusc, yolo_model, clip_extractor, Quaternion, device='cuda',
     for token in tqdm(sample_tokens, desc="PCA fitting"):
         sample = nusc.get('sample', token)
 
-        for cam_ch in ['CAM_FRONT']:  # Just front camera for speed
+        for cam_ch in CAMERA_CHANNELS:  # ALL 6 cameras
             if cam_ch not in sample['data']:
                 continue
 
@@ -782,11 +808,25 @@ def fit_pca(nusc, yolo_model, clip_extractor, Quaternion, device='cuda',
     explained_var = pca.explained_variance_ratio_.sum()
     print(f"  PCA: {n_components} components explain {explained_var*100:.1f}% variance")
 
-    with open(PCA_MODEL_PATH, 'wb') as f:
-        pickle.dump(pca, f)
+    # Compute per-component normalization stats from the training set
+    transformed = pca.transform(all_clip_features)
+    clip_mean = transformed.mean(axis=0)
+    clip_std = transformed.std(axis=0)
+    clip_std[clip_std < 1e-6] = 1.0  # prevent division by zero
 
-    print(f"  Saved PCA model to {PCA_MODEL_PATH}")
-    return pca
+    # Save PCA model + normalization stats together
+    save_data = {
+        'pca': pca,
+        'clip_mean': clip_mean,
+        'clip_std': clip_std,
+    }
+    with open(PCA_MODEL_PATH, 'wb') as f:
+        pickle.dump(save_data, f)
+
+    print(f"  Saved PCA model + normalization stats to {PCA_MODEL_PATH}")
+    print(f"  CLIP component stats: mean range [{clip_mean.min():.3f}, {clip_mean.max():.3f}], "
+          f"std range [{clip_std.min():.3f}, {clip_std.max():.3f}]")
+    return save_data
 
 
 # ============================================================
@@ -805,8 +845,8 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--mode", choices=['fit-pca', 'extract', 'all'], default='all',
                         help="fit-pca: only fit PCA model; extract: extract features; all: both")
-    parser.add_argument("--pca-samples", type=int, default=200,
-                        help="Number of scenes to use for PCA fitting")
+    parser.add_argument("--pca-samples", type=int, default=850,
+                        help="Number of scenes to use for PCA fitting (default: all)")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -842,7 +882,13 @@ def main():
     if pca_model is None:
         if os.path.exists(PCA_MODEL_PATH):
             with open(PCA_MODEL_PATH, 'rb') as f:
-                pca_model = pickle.load(f)
+                loaded = pickle.load(f)
+            # Handle both old format (raw PCA) and new format (dict)
+            if isinstance(loaded, dict):
+                pca_model = loaded
+            else:
+                pca_model = {'pca': loaded, 'clip_mean': None, 'clip_std': None}
+                print("  WARNING: Old PCA format without normalization stats. Re-run with --mode fit-pca.")
             print(f"Loaded PCA model from {PCA_MODEL_PATH}")
         else:
             print(f"ERROR: PCA model not found at {PCA_MODEL_PATH}")
