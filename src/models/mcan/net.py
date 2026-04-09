@@ -184,98 +184,55 @@ class SpatialPositionalEncoding(nn.Module):
 class RadarXFormerAdapter(nn.Module):
     """
     Dual-stream feature adapter for RadarXFormer features (32-dim).
-
-    Inspired by RadarXFormer's separate encoding of radar and image modalities
-    before fusion. Here we separately encode:
-      - Structured features (dims 0-15): category, position, velocity, etc.
-      - Visual features (dims 16-31): CLIP appearance features
-
-    Then fuse them with a learnable modality gate.
+    We concatenate the structured and visual embeddings and map them
+    via a standard MLP, ensuring no ReLU at the final exit.
     """
-
-    def __init__(self, hidden_dim, struct_dim=16, visual_dim=16,
+    def __init__(self, __C, hidden_dim, struct_dim=16, visual_dim=16,
                  num_categories=23, num_attributes=9,
                  cat_emb_dim=64, attr_emb_dim=32):
         super(RadarXFormerAdapter, self).__init__()
+        
+        self.__C = __C
 
         self.struct_dim = struct_dim
         self.visual_dim = visual_dim
 
-        # --- Stream 1: Structured feature encoder ---
         self.cat_emb = nn.Embedding(num_categories, cat_emb_dim)
         self.attr_emb = nn.Embedding(num_attributes + 1, attr_emb_dim)
 
-        struct_input_dim = (struct_dim - 2) + cat_emb_dim + attr_emb_dim  # 14 + 64 + 32 = 110
-        self.struct_encoder = nn.Sequential(
-            nn.Linear(struct_input_dim, hidden_dim),
+        # 14 continuous structured + 64 cat + 32 attr + 16 visual CLIP = 126
+        total_input = (struct_dim - 2) + cat_emb_dim + attr_emb_dim + visual_dim
+        
+        self.proj = nn.Sequential(
+            nn.Linear(total_input, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
             nn.Linear(hidden_dim, hidden_dim),
-        )
-
-        # --- Stream 2: Visual (CLIP) feature encoder ---
-        self.visual_encoder = nn.Sequential(
-            nn.Linear(visual_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-
-        # --- Learnable modality gate ---
-        # Decides how much weight to give structured vs visual features
-        self.gate = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.Sigmoid(),
-        )
-
-        # --- Fusion projection ---
-        self.fusion_proj = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.05),
         )
 
     def forward(self, feat):
-        """
-        feat: (B, N, 32)
-        Dims 0-1: categorical (category_id, attribute_id)
-        Dims 2-15: structured continuous
-        Dims 16-31: CLIP visual features
-        """
         feat = feat.to(torch.float32)
         mask = make_mask(feat)
 
-        # Split into structured and visual
-        struct_feat = feat[:, :, :self.struct_dim]   # (B, N, 16)
-        visual_feat = feat[:, :, self.struct_dim:]   # (B, N, 16)
+        struct_feat = feat[:, :, :self.struct_dim]
+        visual_feat = feat[:, :, self.struct_dim:]
+        if not getattr(self.__C, 'USE_CLIP_FEATURES', True):
+            visual_feat = torch.zeros_like(visual_feat)
 
-        # --- Encode structured features ---
         cat_ids = struct_feat[:, :, 0].long().clamp(0, 22)
         attr_ids = struct_feat[:, :, 1].long().clamp(0, 8)
-        continuous = struct_feat[:, :, 2:]  # (B, N, 14)
+        continuous = struct_feat[:, :, 2:]  
 
-        cat_vec = self.cat_emb(cat_ids)     # (B, N, 64)
-        attr_vec = self.attr_emb(attr_ids)  # (B, N, 32)
-        struct_combined = torch.cat([continuous, cat_vec, attr_vec], dim=-1)
-        struct_enc = self.struct_encoder(struct_combined)  # (B, N, hidden_dim)
+        cat_vec = self.cat_emb(cat_ids)     
+        attr_vec = self.attr_emb(attr_ids)  
+        
+        combined = torch.cat([continuous, cat_vec, attr_vec, visual_feat], dim=-1)
+        proj = self.proj(combined)
 
-        # --- Encode visual (CLIP) features ---
-        visual_enc = self.visual_encoder(visual_feat)  # (B, N, hidden_dim)
+        # Dummy store for diagnostics compatibility
+        self._gate_mean = 0.5
 
-        # --- Learnable gate: fuse the two streams ---
-        gate_input = torch.cat([struct_enc, visual_enc], dim=-1)  # (B, N, 2*hidden_dim)
-        gate_weight = self.gate(gate_input)  # (B, N, hidden_dim) — values in [0, 1]
-
-        # Gate: gate_weight * struct + (1-gate_weight) * visual
-        fused = gate_weight * struct_enc + (1.0 - gate_weight) * visual_enc
-
-        # Final projection
-        fused = self.fusion_proj(fused)
-
-        # Store gate mean for diagnostics
-        self._gate_mean = gate_weight.mean().item()
-
-        return fused, mask
+        return proj, mask
 
 
 class CrossObjectAttention(nn.Module):
@@ -442,6 +399,7 @@ class Net(nn.Module):
 
             # --- RadarXFormer dual-stream adapter ---
             self.radarxf_adapter = RadarXFormerAdapter(
+                __C,
                 __C.HIDDEN_SIZE,
                 struct_dim=16,
                 visual_dim=feat_dim - 16,
@@ -615,43 +573,27 @@ class Net(nn.Module):
           6. Flatten + classify
         """
 
-        # ---- Step 1: Dual-stream feature adaptation ----
+        # ---- Baseline-proven stable architecture ----
         vis_proj, vis_mask = self.radarxf_adapter(radarxf_feat)  # (B, N, hidden)
 
-        # ---- Step 2: Spatial positional encoding ----
-        if self.use_spatial_pe:
-            vis_proj = self.spatial_pe(radarxf_feat, vis_proj)
-
-        # ---- Step 3: Cross-object self-attention ----
-        vis_proj = self.cross_obj_attn(vis_proj, vis_mask)
-
-        # ---- Step 4: MCAN co-attention (language ↔ visual) ----
+        # The MCAN backbone internally handles Cross-Object Attention via Decoder Self-Attention
+        # We pass it directly without stacking additional overlapping layers to preserve gradients
         lang_out, vis_out = self.backbone(
             lang_feat, vis_proj, lang_mask, vis_mask
         )
 
-        # ---- Step 5: Iterative refinement ----
-        if self.n_refine > 1:
-            for i in range(self.n_refine - 1):
-                # Re-apply cross-object attention
-                vis_out = self.refine_cross_obj[i](vis_out, vis_mask)
-                # Re-attend to language
-                lang_out, vis_out = self.refine_backbones[i](
-                    lang_out, vis_out, lang_mask, vis_mask
-                )
-
-        # ---- Step 6: Flatten ----
+        # ---- Flatten ----
         lang_vec = self.attflat_lang(lang_out, lang_mask)
         vis_vec = self.attflat_vis(vis_out, vis_mask)
 
-        # ---- Step 7: Classify ----
+        # ---- Classify ----
         proj_feat = lang_vec + vis_vec
         proj_feat = self.proj_norm(proj_feat)
         logits = self.proj(proj_feat)
 
         # Dummy values for training engine compatibility
         self._count_logits = None
-        self._fusion_gate_mean = self.radarxf_adapter._gate_mean if hasattr(self.radarxf_adapter, '_gate_mean') else 0.5
+        self._fusion_gate_mean = getattr(self.radarxf_adapter, '_gate_mean', 0.5)
 
         return logits
 

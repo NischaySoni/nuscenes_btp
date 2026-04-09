@@ -246,18 +246,21 @@ class NuScenes_QA(Data.Dataset):
 
             elif self.__C.VISUAL_FEATURE == 'radarxf':
                 # RadarXFormer: separate normalization for structured vs CLIP dims
-                # Dims 0-1 (categorical): keep raw
-                # Dims 2-15 (structured continuous): already normalized in extraction
-                # Dims 16-31 (CLIP PCA features): standardize per-sample
                 struct_dim = self.RADARXF_STRUCT_DIM
 
-                # Standardize CLIP features (dims 16+)
-                if feat.shape[1] > struct_dim:
-                    clip_part = feat[:, struct_dim:]
+                # Identify valid rows to preserve the zero-masking for empty slots!
+                valid_mask = np.abs(feat[:, :struct_dim]).sum(axis=1) > 0
+
+                # Standardize CLIP features (dims 16+) ONLY for valid rows
+                if valid_mask.any() and feat.shape[1] > struct_dim:
+                    clip_part = feat[valid_mask, struct_dim:]
                     clip_std = clip_part.std()
                     if clip_std > 1e-6:
-                        feat[:, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
-                    feat[:, struct_dim:] = np.clip(feat[:, struct_dim:], -5.0, 5.0)
+                        feat[valid_mask, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
+                    feat[valid_mask, struct_dim:] = np.clip(feat[valid_mask, struct_dim:], -5.0, 5.0)
+
+                # Ensure empty padding slots remain STRICTLY ZERO to keep attention masks working
+                feat[~valid_mask, :] = 0.0
 
             else:
                 # BEV / annot / detected: global z-score normalization
@@ -314,15 +317,17 @@ class NuScenes_QA(Data.Dataset):
 
         if self.is_annot:
             if self.__C.VISUAL_FEATURE == 'radarxf':
-                # RadarXFormer features: structured dims are pre-normalized,
-                # CLIP dims need per-sample standardization
                 struct_dim = self.RADARXF_STRUCT_DIM
-                if obj_feat.shape[1] > struct_dim:
-                    clip_part = obj_feat[:, struct_dim:]
+                valid_mask = np.abs(obj_feat[:, :struct_dim]).sum(axis=1) > 0
+
+                if valid_mask.any() and obj_feat.shape[1] > struct_dim:
+                    clip_part = obj_feat[valid_mask, struct_dim:]
                     clip_std = clip_part.std()
                     if clip_std > 1e-6:
-                        obj_feat[:, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
-                    obj_feat[:, struct_dim:] = np.clip(obj_feat[:, struct_dim:], -5.0, 5.0)
+                        obj_feat[valid_mask, struct_dim:] = (clip_part - clip_part.mean()) / clip_std
+                    obj_feat[valid_mask, struct_dim:] = np.clip(obj_feat[valid_mask, struct_dim:], -5.0, 5.0)
+
+                obj_feat[~valid_mask, :] = 0.0
             else:
                 # Annotation/Detected features are PRE-NORMALIZED in extraction script
                 pass
