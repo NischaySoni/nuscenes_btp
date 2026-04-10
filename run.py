@@ -57,7 +57,8 @@ def parse_args():
                              'fusion',
                              'annot',
                              'detected',
-                             'radarxf'
+                             'radarxf',
+                             'radarxf_fusion'
                             ],
                          help='{'
                               'BEVDet,'
@@ -66,7 +67,7 @@ def parse_args():
                               'bev,'
                               'yolo,'
                               '}',
-                         type=str, required=True)
+                         type=str, required=False)
 
     parser.add_argument('--EVAL_FREQ', dest='EVAL_FREQUENCY',
                       help='number of epochs between each evaluation',
@@ -151,7 +152,9 @@ if __name__ == '__main__':
     args_dict = __C.parse_to_dict(args)
     
 
-    args_dict = {**yaml_dict, **args_dict}
+    # Only override YAML with CLI args that were explicitly set (not None)
+    args_dict_clean = {k: v for k, v in args_dict.items() if v is not None}
+    args_dict = {**yaml_dict, **args_dict_clean}
     __C.add_args(args_dict)
     __C.proc()
 

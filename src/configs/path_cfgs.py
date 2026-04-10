@@ -47,6 +47,14 @@ class PATH:
             'radarxf': {
                 'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
                 'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'},
+            'radarxf_fusion': {
+                'bev': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'},
+                'radarxf': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'}
+            },
         }
         self.VISUAL_FEATURE = 'bev'
 
@@ -80,11 +88,12 @@ class PATH:
     def check_path(self, vis_feat):
         print('Checking Data Path ........')
 
-        if vis_feat == 'fusion':
-            # Fusion mode: nested structure with bev and yolo sub-keys
-            for sub_feat in ['bev', 'yolo']:
-                for split in self.FEATS_PATH['fusion'][sub_feat]:
-                    p = self.FEATS_PATH['fusion'][sub_feat][split]
+        if vis_feat in ['fusion', 'radarxf_fusion']:
+            # Fusion modes: nested structure
+            sub_feats = ['bev', 'yolo'] if vis_feat == 'fusion' else ['bev', 'radarxf']
+            for sub_feat in sub_feats:
+                for split in self.FEATS_PATH[vis_feat][sub_feat]:
+                    p = self.FEATS_PATH[vis_feat][sub_feat][split]
                     if not os.path.exists(p):
                         print(p, 'NOT EXIST')
                         exit(-1)
