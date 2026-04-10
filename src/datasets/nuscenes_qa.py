@@ -80,8 +80,8 @@ class NuScenes_QA(Data.Dataset):
 
         elif self.is_radarxf_fusion:
             # RadarXF Fusion: load from BEV + RadarXF V2 directories
-            bev_dir = __C.FEATS_PATH['fusion']['bev'][split]
-            radarxf_dir = __C.FEATS_PATH['radarxf'][split]
+            bev_dir = __C.FEATS_PATH['radarxf_fusion']['bev'][split]
+            radarxf_dir = __C.FEATS_PATH['radarxf_fusion']['radarxf'][split]
 
             self.stk2bevpath = {
                 os.path.basename(p).split('.')[0]: p

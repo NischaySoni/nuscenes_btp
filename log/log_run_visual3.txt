@@ -1,0 +1,113 @@
+{ BATCH_SIZE        }->16
+{ BBOXFEAT_EMB_SIZE }->512
+{ BBOX_NORMALIZE    }->False
+{ CKPTS_PATH        }->./outputs/ckpts
+{ CKPT_EPOCH        }->0
+{ CKPT_PATH         }->None
+{ CKPT_VERSION      }->2779569
+{ DATA_ROOT         }->./data
+{ DEVICES           }->[0]
+{ DROPOUT_R         }->0.2
+{ EVAL_BATCH_SIZE   }->8
+{ EVAL_FREQUENCY    }->3
+{ FEATS_PATH        }->{'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}}
+{ FEAT_SIZE         }->{'OBJ_FEAT_SIZE': (80, 69), 'BBOX_FEAT_SIZE': (80, 4)}
+{ FF_SIZE           }->2048
+{ FLAT_GLIMPSES     }->3
+{ FLAT_MLP_SIZE     }->512
+{ FLAT_OUT_SIZE     }->1024
+{ GPU               }->0
+{ GRAD_ACCU_STEPS   }->1
+{ GRAD_NORM_CLIP    }->-1
+{ HIDDEN_SIZE       }->512
+{ LAYER             }->8
+{ LOG_PATH          }->./outputs/log
+{ LOSS_FUNC         }->ce
+{ LOSS_FUNC_NAME_DICT }->{'ce': 'CrossEntropyLoss', 'bce': 'BCEWithLogitsLoss', 'kld': 'KLDivLoss', 'mse': 'MSELoss'}
+{ LOSS_FUNC_NONLINEAR }->{'ce': [None, 'flat'], 'bce': [None, None], 'kld': ['log_softmax', None], 'mse': [None, None]}
+{ LOSS_REDUCTION    }->sum
+{ LR_BASE           }->0.0001
+{ LR_DECAY_LIST     }->[8, 11]
+{ LR_DECAY_R        }->0.1
+{ MAX_EPOCH         }->13
+{ MODEL             }->mcan_small
+{ MODEL_USE         }->mcan
+{ MULTI_HEAD        }->8
+{ NUM_WORKERS       }->8
+{ N_GPU             }->1
+{ OPT               }->Adam
+{ OPT_PARAMS        }->{'betas': (0.9, 0.98), 'eps': 1e-09, 'weight_decay': 0.0001, 'amsgrad': False}
+{ PIN_MEM           }->True
+{ RAW_PATH          }->{'train': './data/questions/NuScenes_train_questions.json', 'val': './data/questions/NuScenes_val_questions.json'}
+{ RESULT_PATH       }->./outputs/result
+{ RESUME            }->False
+{ RUN_MODE          }->train
+{ SEED              }->2779569
+{ SPLIT             }->{'train': 'train', 'val': 'val'}
+{ SUB_BATCH_SIZE    }->16
+{ USE_BBOX_FEAT     }->True
+{ VERSION           }->visual3
+{ VISUAL_FEATURE    }->bev
+{ WARMUP_EPOCH      }->3
+{ WORD_EMBED_SIZE   }->300
+=====================================
+nowTime: 2026-03-12 09:58:44
+Epoch: 1, Loss: 1.1443436849154125, Lr: 2.5e-05
+Elapsed time: 5090, Speed(s/batch): 0.2162947685113981
+
+Overall : 43919 / 83337 = 52.70
+comparison : 8580 / 12809 = 66.98
+comparison_0 : 896 / 1150 = 77.91
+comparison_1 : 7684 / 11659 = 65.91
+count : 2846 / 16471 = 17.28
+count_0 : 1379 / 8119 = 16.98
+count_1 : 1467 / 8352 = 17.56
+exist : 19767 / 24634 = 80.24
+exist_0 : 9309 / 11337 = 82.11
+exist_1 : 10458 / 13297 = 78.65
+object : 7357 / 17446 = 42.17
+object_0 : 1592 / 2568 = 61.99
+object_1 : 5765 / 14878 = 38.75
+status : 5369 / 11977 = 44.83
+status_0 : 2159 / 4070 = 53.05
+status_1 : 3210 / 7907 = 40.60
+
+=====================================
+nowTime: 2026-03-12 11:34:23
+Epoch: 2, Loss: 1.102205395247798, Lr: 5e-05
+Elapsed time: 5001, Speed(s/batch): 0.2125108018770743
+
+=====================================
+nowTime: 2026-03-12 12:58:03
+Epoch: 3, Loss: 1.1060820408423828, Lr: 7.500000000000001e-05
+Elapsed time: 4981, Speed(s/batch): 0.21165028367416944
+
+=====================================
+nowTime: 2026-03-12 14:21:25
+Epoch: 4, Loss: 1.1131900298262558, Lr: 0.0001
+Elapsed time: 4932, Speed(s/batch): 0.209575464851511
+
+Overall : 44939 / 83337 = 53.92
+comparison : 8553 / 12809 = 66.77
+comparison_0 : 895 / 1150 = 77.83
+comparison_1 : 7658 / 11659 = 65.68
+count : 2978 / 16471 = 18.08
+count_0 : 1505 / 8119 = 18.54
+count_1 : 1473 / 8352 = 17.64
+exist : 19789 / 24634 = 80.33
+exist_0 : 9286 / 11337 = 81.91
+exist_1 : 10503 / 13297 = 78.99
+object : 7508 / 17446 = 43.04
+object_0 : 1552 / 2568 = 60.44
+object_1 : 5956 / 14878 = 40.03
+status : 6111 / 11977 = 51.02
+status_0 : 2293 / 4070 = 56.34
+status_1 : 3818 / 7907 = 48.29
+
+=====================================
+nowTime: 2026-03-12 15:54:33
+Epoch: 5, Loss: 1.0780834529220358, Lr: 0.0001
+Elapsed time: 4922, Speed(s/batch): 0.20914998873409812
+
+=====================================
+nowTime: 2026-03-12 17:16:49

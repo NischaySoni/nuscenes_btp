@@ -1,0 +1,211 @@
+{ BATCH_SIZE        }->16
+{ BBOXFEAT_EMB_SIZE }->512
+{ BBOX_FEAT_SIZE    }->[80, 13]
+{ BBOX_NORMALIZE    }->False
+{ CKPTS_PATH        }->./outputs/ckpts
+{ CKPT_EPOCH        }->0
+{ CKPT_PATH         }->None
+{ CKPT_VERSION      }->4660247
+{ COUNT_LOSS_WEIGHT }->0.5
+{ CROSS_MODAL_LAYERS }->2
+{ DATA_ROOT         }->./data
+{ DEVICES           }->[0]
+{ DROPOUT_R         }->0.2
+{ EVAL_BATCH_SIZE   }->8
+{ EVAL_FREQUENCY    }->3
+{ FEATS_PATH        }->{'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}, 'fusion': {'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}}}
+{ FEAT_SIZE         }->{'OBJ_FEAT_SIZE': (80, 69), 'BBOX_FEAT_SIZE': (80, 13)}
+{ FF_SIZE           }->2048
+{ FLAT_GLIMPSES     }->3
+{ FLAT_MLP_SIZE     }->512
+{ FLAT_OUT_SIZE     }->1024
+{ FUSE_RADAR_DATA   }->False
+{ GPU               }->0
+{ GRAD_ACCU_STEPS   }->1
+{ GRAD_NORM_CLIP    }->1.0
+{ HIDDEN_SIZE       }->512
+{ LABEL_SMOOTHING   }->0.1
+{ LAYER             }->6
+{ LOG_PATH          }->./outputs/log
+{ LOSS_FUNC         }->ce
+{ LOSS_FUNC_NAME_DICT }->{'ce': 'CrossEntropyLoss', 'bce': 'BCEWithLogitsLoss', 'kld': 'KLDivLoss', 'mse': 'MSELoss'}
+{ LOSS_FUNC_NONLINEAR }->{'ce': [None, 'flat'], 'bce': [None, None], 'kld': ['log_softmax', None], 'mse': [None, None]}
+{ LOSS_REDUCTION    }->sum
+{ LR_BASE           }->0.0001
+{ LR_DECAY_LIST     }->[8, 12]
+{ LR_DECAY_R        }->0.1
+{ MAX_EPOCH         }->25
+{ MODEL             }->mcan_small_fusion
+{ MODEL_USE         }->mcan
+{ MULTI_HEAD        }->8
+{ NUM_WORKERS       }->8
+{ N_GPU             }->1
+{ OBJ_FEAT_SIZE     }->[80, 69]
+{ OPT               }->Adam
+{ OPT_PARAMS        }->{'betas': (0.9, 0.98), 'eps': 1e-09, 'weight_decay': 0.0001, 'amsgrad': False}
+{ PIN_MEM           }->True
+{ RAW_PATH          }->{'train': './data/questions/NuScenes_train_questions.json', 'val': './data/questions/NuScenes_val_questions.json'}
+{ RESULT_PATH       }->./outputs/result
+{ RESUME            }->False
+{ RUN_MODE          }->train
+{ SEED              }->4660247
+{ SPLIT             }->{'train': 'train', 'val': 'val'}
+{ SUB_BATCH_SIZE    }->16
+{ USE_BBOX_FEAT     }->False
+{ USE_YOLO_DETECTION }->False
+{ VERSION           }->fusion_v3
+{ VISUAL_FEATURE    }->fusion
+{ WARMUP_EPOCH      }->3
+{ WORD_EMBED_SIZE   }->300
+=====================================
+nowTime: 2026-04-02 19:24:37
+Epoch: 1, Loss: 1.7435502917274976, Lr: 2.5e-05
+Elapsed time: 5276, Speed(s/batch): 0.22418189965488908
+
+Overall : 44219 / 83337 = 53.06
+comparison : 8621 / 12809 = 67.30
+comparison_0 : 916 / 1150 = 79.65
+comparison_1 : 7705 / 11659 = 66.09
+count : 2920 / 16471 = 17.73
+count_0 : 1476 / 8119 = 18.18
+count_1 : 1444 / 8352 = 17.29
+exist : 19735 / 24634 = 80.11
+exist_0 : 9262 / 11337 = 81.70
+exist_1 : 10473 / 13297 = 78.76
+object : 7257 / 17446 = 41.60
+object_0 : 1539 / 2568 = 59.93
+object_1 : 5718 / 14878 = 38.43
+status : 5686 / 11977 = 47.47
+status_0 : 2160 / 4070 = 53.07
+status_1 : 3526 / 7907 = 44.59
+
+=====================================
+nowTime: 2026-04-02 21:03:11
+Epoch: 2, Loss: 1.684682274845759, Lr: 5e-05
+Elapsed time: 5148, Speed(s/batch): 0.218746091118431
+
+=====================================
+nowTime: 2026-04-02 22:29:54
+Epoch: 3, Loss: 1.6762253754003544, Lr: 7.500000000000001e-05
+Elapsed time: 5157, Speed(s/batch): 0.21913332506009553
+
+=====================================
+nowTime: 2026-04-02 23:56:37
+Epoch: 4, Loss: 1.6740901600319225, Lr: 0.0001
+Elapsed time: 5121, Speed(s/batch): 0.2176052858811569
+
+Overall : 44929 / 83337 = 53.91
+comparison : 8645 / 12809 = 67.49
+comparison_0 : 935 / 1150 = 81.30
+comparison_1 : 7710 / 11659 = 66.13
+count : 3130 / 16471 = 19.00
+count_0 : 1553 / 8119 = 19.13
+count_1 : 1577 / 8352 = 18.88
+exist : 19820 / 24634 = 80.46
+exist_0 : 9337 / 11337 = 82.36
+exist_1 : 10483 / 13297 = 78.84
+object : 7451 / 17446 = 42.71
+object_0 : 1526 / 2568 = 59.42
+object_1 : 5925 / 14878 = 39.82
+status : 5883 / 11977 = 49.12
+status_0 : 2234 / 4070 = 54.89
+status_1 : 3649 / 7907 = 46.15
+
+=====================================
+nowTime: 2026-04-03 01:32:40
+Epoch: 5, Loss: 1.6701429602665558, Lr: 0.0001
+Elapsed time: 5118, Speed(s/batch): 0.21745042832912612
+
+=====================================
+nowTime: 2026-04-03 02:58:48
+Epoch: 6, Loss: 1.66823260073915, Lr: 0.0001
+Elapsed time: 5073, Speed(s/batch): 0.2155650696039514
+
+=====================================
+nowTime: 2026-04-03 04:24:07
+Epoch: 7, Loss: 1.6670286362616173, Lr: 0.0001
+Elapsed time: 5179, Speed(s/batch): 0.22005780876586892
+
+Overall : 44723 / 83337 = 53.67
+comparison : 8295 / 12809 = 64.76
+comparison_0 : 899 / 1150 = 78.17
+comparison_1 : 7396 / 11659 = 63.44
+count : 3015 / 16471 = 18.30
+count_0 : 1447 / 8119 = 17.82
+count_1 : 1568 / 8352 = 18.77
+exist : 19765 / 24634 = 80.23
+exist_0 : 9342 / 11337 = 82.40
+exist_1 : 10423 / 13297 = 78.39
+object : 7712 / 17446 = 44.20
+object_0 : 1667 / 2568 = 64.91
+object_1 : 6045 / 14878 = 40.63
+status : 5936 / 11977 = 49.56
+status_0 : 2325 / 4070 = 57.13
+status_1 : 3611 / 7907 = 45.67
+
+=====================================
+nowTime: 2026-04-03 06:00:52
+Epoch: 8, Loss: 1.6669568041732281, Lr: 0.0001
+Elapsed time: 5000, Speed(s/batch): 0.21246816853970046
+
+=====================================
+nowTime: 2026-04-03 07:25:14
+Epoch: 9, Loss: 1.6535521839060325, Lr: 1e-05
+Elapsed time: 4948, Speed(s/batch): 0.21023219782559474
+
+=====================================
+nowTime: 2026-04-03 08:48:30
+Epoch: 10, Loss: 1.6518139131039986, Lr: 1e-05
+Elapsed time: 5003, Speed(s/batch): 0.21257937698511745
+
+Overall : 45737 / 83337 = 54.88
+comparison : 8614 / 12809 = 67.25
+comparison_0 : 922 / 1150 = 80.17
+comparison_1 : 7692 / 11659 = 65.97
+count : 3101 / 16471 = 18.83
+count_0 : 1523 / 8119 = 18.76
+count_1 : 1578 / 8352 = 18.89
+exist : 19968 / 24634 = 81.06
+exist_0 : 9382 / 11337 = 82.76
+exist_1 : 10586 / 13297 = 79.61
+object : 7901 / 17446 = 45.29
+object_0 : 1667 / 2568 = 64.91
+object_1 : 6234 / 14878 = 41.90
+status : 6153 / 11977 = 51.37
+status_0 : 2323 / 4070 = 57.08
+status_1 : 3830 / 7907 = 48.44
+
+=====================================
+nowTime: 2026-04-03 10:22:17
+Epoch: 11, Loss: 1.6516889046549492, Lr: 1e-05
+Elapsed time: 5298, Speed(s/batch): 0.22509905742637645
+
+=====================================
+nowTime: 2026-04-03 11:51:30
+Epoch: 12, Loss: 1.6513454387121385, Lr: 1e-05
+Elapsed time: 5085, Speed(s/batch): 0.21607867612983395
+
+=====================================
+nowTime: 2026-04-03 13:16:58
+Epoch: 13, Loss: 1.6493924529531871, Lr: 1.0000000000000002e-06
+Elapsed time: 5079, Speed(s/batch): 0.2158040987096536
+
+Overall : 45739 / 83337 = 54.88
+comparison : 8615 / 12809 = 67.26
+comparison_0 : 918 / 1150 = 79.83
+comparison_1 : 7697 / 11659 = 66.02
+count : 3112 / 16471 = 18.89
+count_0 : 1524 / 8119 = 18.77
+count_1 : 1588 / 8352 = 19.01
+exist : 19959 / 24634 = 81.02
+exist_0 : 9367 / 11337 = 82.62
+exist_1 : 10592 / 13297 = 79.66
+object : 7893 / 17446 = 45.24
+object_0 : 1667 / 2568 = 64.91
+object_1 : 6226 / 14878 = 41.85
+status : 6160 / 11977 = 51.43
+status_0 : 2317 / 4070 = 56.93
+status_1 : 3843 / 7907 = 48.60
+
+=====================================
+nowTime: 2026-04-03 14:52:19

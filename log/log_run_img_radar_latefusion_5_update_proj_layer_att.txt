@@ -1,0 +1,76 @@
+{ BATCH_SIZE        }->16
+{ BBOXFEAT_EMB_SIZE }->512
+{ BBOX_NORMALIZE    }->False
+{ CKPTS_PATH        }->./outputs/ckpts
+{ CKPT_EPOCH        }->0
+{ CKPT_PATH         }->None
+{ CKPT_VERSION      }->4677992
+{ DATA_ROOT         }->./data
+{ DEVICES           }->[0]
+{ DROPOUT_R         }->0.1
+{ EVAL_BATCH_SIZE   }->8
+{ EVAL_FREQUENCY    }->3
+{ FEATS_PATH        }->{'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}}
+{ FEAT_SIZE         }->{'OBJ_FEAT_SIZE': (100, 69), 'BBOX_FEAT_SIZE': (100, 4)}
+{ FF_SIZE           }->2048
+{ FLAT_GLIMPSES     }->4
+{ FLAT_MLP_SIZE     }->512
+{ FLAT_OUT_SIZE     }->1024
+{ GPU               }->0
+{ GRAD_ACCU_STEPS   }->1
+{ GRAD_NORM_CLIP    }->-1
+{ HIDDEN_SIZE       }->512
+{ LAYER             }->8
+{ LOG_PATH          }->./outputs/log
+{ LOSS_FUNC         }->ce
+{ LOSS_FUNC_NAME_DICT }->{'ce': 'CrossEntropyLoss', 'bce': 'BCEWithLogitsLoss', 'kld': 'KLDivLoss', 'mse': 'MSELoss'}
+{ LOSS_FUNC_NONLINEAR }->{'ce': [None, 'flat'], 'bce': [None, None], 'kld': ['log_softmax', None], 'mse': [None, None]}
+{ LOSS_REDUCTION    }->sum
+{ LR_BASE           }->0.0001
+{ LR_DECAY_LIST     }->[10, 12]
+{ LR_DECAY_R        }->0.2
+{ MAX_EPOCH         }->13
+{ MODEL             }->mcan_small
+{ MODEL_USE         }->mcan
+{ MULTI_HEAD        }->8
+{ NUM_WORKERS       }->8
+{ N_GPU             }->1
+{ OPT               }->Adam
+{ OPT_PARAMS        }->{'betas': (0.9, 0.98), 'eps': 1e-09, 'weight_decay': 0.0001, 'amsgrad': False}
+{ PIN_MEM           }->True
+{ RAW_PATH          }->{'train': './data/questions/NuScenes_train_questions.json', 'val': './data/questions/NuScenes_val_questions.json'}
+{ RESULT_PATH       }->./outputs/result
+{ RESUME            }->False
+{ RUN_MODE          }->train
+{ SEED              }->4677992
+{ SPLIT             }->{'train': 'train', 'val': 'val'}
+{ SUB_BATCH_SIZE    }->16
+{ USE_BBOX_FEAT     }->True
+{ VERSION           }->img_radar_latefusion_5_update_proj_layer_att
+{ VISUAL_FEATURE    }->bev
+{ WARMUP_EPOCH      }->3
+{ WORD_EMBED_SIZE   }->300
+=====================================
+nowTime: 2026-03-06 21:23:23
+Epoch: 1, Loss: 1.2223977363768872, Lr: 2.5e-05
+Elapsed time: 5632, Speed(s/batch): 0.2393022251830143
+
+Overall : 41596 / 83337 = 49.91
+comparison : 7134 / 12809 = 55.70
+comparison_0 : 723 / 1150 = 62.87
+comparison_1 : 6411 / 11659 = 54.99
+count : 2438 / 16471 = 14.80
+count_0 : 1204 / 8119 = 14.83
+count_1 : 1234 / 8352 = 14.77
+exist : 19031 / 24634 = 77.26
+exist_0 : 9113 / 11337 = 80.38
+exist_1 : 9918 / 13297 = 74.59
+object : 7241 / 17446 = 41.51
+object_0 : 1560 / 2568 = 60.75
+object_1 : 5681 / 14878 = 38.18
+status : 5752 / 11977 = 48.03
+status_0 : 2186 / 4070 = 53.71
+status_1 : 3566 / 7907 = 45.10
+
+=====================================
+nowTime: 2026-03-06 23:05:17
