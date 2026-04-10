@@ -385,6 +385,7 @@ class Net(nn.Module):
 
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
+        self.is_radarxf_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'radarxf_fusion')
         self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('annot', 'detected'))
         self.is_radarxf = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'radarxf')
 
@@ -419,6 +420,53 @@ class Net(nn.Module):
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
             print(f"  [MCAN RadarXF] Total params: {total_params:,}, Trainable: {trainable:,}")
+
+        elif self.is_radarxf_fusion:
+            # ================================================
+            # RADARXF + BEV FUSION MODE
+            # ================================================
+            rxf_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 48
+            print(f"  [MCAN] RADARXF_FUSION mode: BEV dim={bev_dim}, RadarXF dim={rxf_dim}")
+
+            # Adapters
+            self.bev_adapter = Adapter(bev_dim, __C.HIDDEN_SIZE)
+            self.radarxf_adapter = RadarXFormerAdapter(
+                __C, __C.HIDDEN_SIZE,
+                struct_dim=16,
+                visual_dim=rxf_dim - 16,
+            )
+
+            # Dual backbones
+            self.backbone_bev = MCA_ED(__C)
+            self.backbone_rxf = MCA_ED(__C)
+
+            # Cross-modal attention
+            cross_layers = getattr(__C, 'CROSS_MODAL_LAYERS', 2)
+            self.cross_modal = CrossModalAttention(__C, num_layers=cross_layers)
+
+            # Flatten
+            self.attflat_lang_bev = AttFlat(__C)
+            self.attflat_lang_rxf = AttFlat(__C)
+            self.attflat_bev = AttFlat(__C)
+            self.attflat_rxf = AttFlat(__C)
+
+            # Lang fusion
+            self.lang_fusion = nn.Sequential(
+                nn.Linear(__C.FLAT_OUT_SIZE * 2, __C.FLAT_OUT_SIZE),
+                nn.ReLU(inplace=True),
+                nn.Dropout(__C.DROPOUT_R),
+            )
+
+            # Visual fusion
+            self.fusion_mlp = MLPConcatFusion(__C)
+
+            # Classify
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN RadarXF Fusion] Total params: {total_params:,}, Trainable: {trainable:,}")
 
         elif self.is_fusion:
             yolo_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]
@@ -530,6 +578,8 @@ class Net(nn.Module):
 
         if self.is_radarxf:
             return self._forward_radarxf(obj_feat, lang_feat, lang_mask)
+        elif self.is_radarxf_fusion:
+            return self._forward_radarxf_fusion(obj_feat, bbox_feat, lang_feat, lang_mask)
         elif self.is_fusion:
             return self._forward_fusion(obj_feat, bbox_feat, lang_feat, lang_mask)
         elif self.is_annot:
@@ -562,6 +612,51 @@ class Net(nn.Module):
         # Dummy values for training engine compatibility
         self._count_logits = None
         self._fusion_gate_mean = getattr(self.radarxf_adapter, '_gate_mean', 0.5)
+
+        return logits
+
+
+    def _forward_radarxf_fusion(self, bev_feat, rxf_feat, lang_feat, lang_mask):
+        """BEV + RadarXFormer Dual-Encoder Fusion path."""
+
+        # Adapt both modalities
+        bev_proj, bev_mask = self.bev_adapter(bev_feat)
+        rxf_proj, rxf_mask = self.radarxf_adapter(rxf_feat)
+
+        # Independent language-visual co-attention
+        lang_bev, bev_out = self.backbone_bev(
+            lang_feat.clone(), bev_proj, lang_mask, bev_mask
+        )
+        lang_rxf, rxf_out = self.backbone_rxf(
+            lang_feat.clone(), rxf_proj, lang_mask, rxf_mask
+        )
+
+        # Cross-modal attention between modalities
+        bev_out, rxf_out = self.cross_modal(
+            bev_out, rxf_out, bev_mask, rxf_mask
+        )
+
+        # Flatten
+        lang_bev_vec = self.attflat_lang_bev(lang_bev, lang_mask)
+        lang_rxf_vec = self.attflat_lang_rxf(lang_rxf, lang_mask)
+        bev_vec = self.attflat_bev(bev_out, bev_mask)
+        rxf_vec = self.attflat_rxf(rxf_out, rxf_mask)
+
+        # Fuse language streams
+        lang_vec = self.lang_fusion(
+            torch.cat([lang_bev_vec, lang_rxf_vec], dim=-1)
+        )
+
+        # Fuse visual streams
+        fused_visual = self.fusion_mlp(bev_vec, rxf_vec)
+
+        # Classify
+        proj_feat = lang_vec + fused_visual
+        proj_feat = self.proj_norm(proj_feat)
+        logits = self.proj(proj_feat)
+
+        self._count_logits = None
+        self._fusion_gate_mean = 0.5
 
         return logits
 

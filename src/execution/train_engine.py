@@ -78,8 +78,8 @@ def train_engine(__C, dataset, dataset_eval=None):
 
     # Define Loss Function — with label smoothing for fusion/annot/detected mode
     vis_feat = getattr(__C, 'VISUAL_FEATURE', 'bev')
-    is_fusion = (vis_feat == 'fusion')
-    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if vis_feat in ('fusion', 'annot', 'detected') else 0.0
+    is_fusion = (vis_feat in ('fusion', 'radarxf_fusion'))
+    label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0) if vis_feat in ('fusion', 'radarxf_fusion', 'annot', 'detected', 'radarxf') else 0.0
 
     if __C.LOSS_FUNC == 'ce':
         loss_fn = nn.CrossEntropyLoss(

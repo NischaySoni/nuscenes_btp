@@ -48,6 +48,7 @@ class NuScenes_QA(Data.Dataset):
         # ---- Feature paths ----
         # --------------------------
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
+        self.is_radarxf_fusion = (__C.VISUAL_FEATURE == 'radarxf_fusion')
         self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected', 'radarxf'))
 
         if self.is_fusion:
@@ -76,6 +77,25 @@ class NuScenes_QA(Data.Dataset):
                 print(f'  [Fusion] {len(bev_only)} samples have BEV only (will zero-pad YOLO)')
             if yolo_only:
                 print(f'  [Fusion] {len(yolo_only)} samples have YOLO only (will zero-pad BEV)')
+
+        elif self.is_radarxf_fusion:
+            # RadarXF Fusion: load from BEV + RadarXF V2 directories
+            bev_dir = __C.FEATS_PATH['fusion']['bev'][split]
+            radarxf_dir = __C.FEATS_PATH['radarxf'][split]
+
+            self.stk2bevpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(bev_dir + '/*.npy')
+            }
+            self.stk2radarxfpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(radarxf_dir + '/*.npy')
+            }
+
+            common = set(self.stk2bevpath.keys()) & set(self.stk2radarxfpath.keys())
+            print(f'  [RadarXF Fusion] BEV features: {len(self.stk2bevpath)}, '
+                  f'RadarXF features: {len(self.stk2radarxfpath)}, '
+                  f'Common: {len(common)}')
 
         else:
             # Single-feature mode: BEV, YOLO, or Annotation
@@ -160,6 +180,29 @@ class NuScenes_QA(Data.Dataset):
                 torch.from_numpy(ans),
                 torch.tensor(qtype_ix, dtype=torch.long),
             )
+        elif self.is_radarxf_fusion:
+            bev_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
+            rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (100, 48)
+
+            bev_feat = self._load_feat_safe(scene_token, 'bev', bev_shape)
+            rxf_feat = self._load_feat_safe(scene_token, 'radarxf', rxf_shape)
+
+            # BEV: global z-score normalization
+            bev_feat = (bev_feat - bev_feat.mean()) / (bev_feat.std() + 1e-6)
+            bev_feat = np.clip(bev_feat, -5.0, 5.0)
+
+            # RadarXF: already pre-normalized, just zero out padding
+            struct_dim = 16
+            valid_mask = np.abs(rxf_feat[:, :struct_dim]).sum(axis=1) > 0
+            rxf_feat[~valid_mask, :] = 0.0
+
+            return (
+                torch.from_numpy(bev_feat),
+                torch.from_numpy(rxf_feat),
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),
+            )
         else:
             obj_feat = self.load_obj_feats(scene_token)
             obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
@@ -204,6 +247,16 @@ class NuScenes_QA(Data.Dataset):
             
             if scene_token in path_map:
                 feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+        elif self.is_radarxf_fusion:
+            if feat_type == 'bev':
+                path_map = self.stk2bevpath
+            else:
+                path_map = self.stk2radarxfpath
+
+            if scene_token in path_map:
+                feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+            else:
+                return np.zeros(expected_shape, dtype=np.float32)
         else:
             # Single or KD Mode
             if feat_type == 'annot' and getattr(self.__C, 'USE_KD', 'False') == 'True':

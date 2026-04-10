@@ -23,6 +23,7 @@ def parse_args():
                            'mcan_annotation',
                            'mcan_detected',
                            'mcan_radarxformer',
+                           'mcan_radarxf_fusion',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
