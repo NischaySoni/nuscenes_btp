@@ -464,6 +464,14 @@ class Net(nn.Module):
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
             self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
+            # Dedicated count head (11 classes for counts 0-10)
+            self.count_head = nn.Sequential(
+                nn.Linear(__C.FLAT_OUT_SIZE, __C.FLAT_OUT_SIZE // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout(__C.DROPOUT_R),
+                nn.Linear(__C.FLAT_OUT_SIZE // 2, 11),
+            )
+
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
             print(f"  [MCAN RadarXF Fusion] Total params: {total_params:,}, Trainable: {trainable:,}")
@@ -655,7 +663,8 @@ class Net(nn.Module):
         proj_feat = self.proj_norm(proj_feat)
         logits = self.proj(proj_feat)
 
-        self._count_logits = None
+        # Dedicated count head
+        self._count_logits = self.count_head(proj_feat)
         self._fusion_gate_mean = 0.5
 
         return logits

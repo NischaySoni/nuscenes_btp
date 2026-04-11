@@ -116,11 +116,17 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
             q_index = step * __C.EVAL_BATCH_SIZE + i
 
             if q_index < len(dataset.qa_list):
+                qa_item = dataset.qa_list[q_index]
+                # Get ground truth answer index from answer dict (not from batch tensor which is 0 in val)
+                gt_ans_str = str(qa_item['answer'])
+                gt_idx = dataset.ans2ix.get(gt_ans_str, -1)
 
                 results.append({
-                    "question": dataset.qa_list[q_index]["question"],
-                    "gt": int(ans_iter[i]),
-                    "pred": int(pred_idx[i])
+                    "question": qa_item["question"],
+                    "gt_answer": gt_ans_str,
+                    "gt": gt_idx,
+                    "pred": int(pred_idx[i]),
+                    "qtype": qa_item.get('template_type', 'unknown'),
                 })
 
         # ------------------------------------------------

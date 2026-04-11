@@ -40,7 +40,7 @@ OPT: Adam
 OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
 
 # Fusion-specific
-COUNT_LOSS_WEIGHT: 0.0
+COUNT_LOSS_WEIGHT: 0.3
 LABEL_SMOOTHING: 0.1
 CROSS_MODAL_LAYERS: 2
 USE_YOLO_DETECTION: False
