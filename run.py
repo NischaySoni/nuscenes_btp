@@ -24,6 +24,7 @@ def parse_args():
                            'mcan_detected',
                            'mcan_radarxformer',
                            'mcan_radarxf_fusion',
+                           'mcan_trimodal_fusion',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -58,7 +59,8 @@ def parse_args():
                              'annot',
                              'detected',
                              'radarxf',
-                             'radarxf_fusion'
+                             'radarxf_fusion',
+                             'trimodal_fusion'
                             ],
                          help='{'
                               'BEVDet,'

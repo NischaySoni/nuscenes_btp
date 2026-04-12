@@ -49,6 +49,7 @@ class NuScenes_QA(Data.Dataset):
         # --------------------------
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
         self.is_radarxf_fusion = (__C.VISUAL_FEATURE == 'radarxf_fusion')
+        self.is_trimodal_fusion = (__C.VISUAL_FEATURE == 'trimodal_fusion')
         self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected', 'radarxf'))
 
         if self.is_fusion:
@@ -95,6 +96,31 @@ class NuScenes_QA(Data.Dataset):
             common = set(self.stk2bevpath.keys()) & set(self.stk2radarxfpath.keys())
             print(f'  [RadarXF Fusion] BEV features: {len(self.stk2bevpath)}, '
                   f'RadarXF features: {len(self.stk2radarxfpath)}, '
+                  f'Common: {len(common)}')
+
+        elif self.is_trimodal_fusion:
+            # Trimodal Fusion: BEV + RadarXF + LiDAR
+            bev_dir = __C.FEATS_PATH['trimodal_fusion']['bev'][split]
+            radarxf_dir = __C.FEATS_PATH['trimodal_fusion']['radarxf'][split]
+            lidar_dir = __C.FEATS_PATH['trimodal_fusion']['lidar'][split]
+
+            self.stk2bevpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(bev_dir + '/*.npy')
+            }
+            self.stk2radarxfpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(radarxf_dir + '/*.npy')
+            }
+            self.stk2lidarpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(lidar_dir + '/*.npy')
+            }
+
+            common = set(self.stk2bevpath.keys()) & set(self.stk2radarxfpath.keys()) & set(self.stk2lidarpath.keys())
+            print(f'  [Trimodal Fusion] BEV: {len(self.stk2bevpath)}, '
+                  f'RadarXF: {len(self.stk2radarxfpath)}, '
+                  f'LiDAR: {len(self.stk2lidarpath)}, '
                   f'Common: {len(common)}')
 
         else:
@@ -203,6 +229,46 @@ class NuScenes_QA(Data.Dataset):
                 torch.from_numpy(ans),
                 torch.tensor(qtype_ix, dtype=torch.long),
             )
+        elif self.is_trimodal_fusion:
+            # Trimodal: BEV + LiDAR (concatenated) + RadarXF
+            camera_bev_dim = getattr(self.__C, 'CAMERA_BEV_DIM', 69)
+            lidar_shape = tuple(getattr(self.__C, 'LIDAR_FEAT_SIZE', [80, 6]))
+            rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (100, 48)
+
+            # Load camera BEV (80, 69)
+            bev_feat = self._load_feat_safe(scene_token, 'bev', (lidar_shape[0], camera_bev_dim))
+
+            # Load LiDAR BEV (80, 6)
+            lidar_feat = self._load_feat_safe(scene_token, 'lidar', lidar_shape)
+
+            # Load RadarXF (100, 48)
+            rxf_feat = self._load_feat_safe(scene_token, 'radarxf', rxf_shape)
+
+            # Normalize BEV
+            bev_feat = (bev_feat - bev_feat.mean()) / (bev_feat.std() + 1e-6)
+            bev_feat = np.clip(bev_feat, -5.0, 5.0)
+
+            # Normalize LiDAR BEV (z-score per-sample)
+            lidar_std = lidar_feat.std()
+            if lidar_std > 1e-6:
+                lidar_feat = (lidar_feat - lidar_feat.mean()) / lidar_std
+                lidar_feat = np.clip(lidar_feat, -5.0, 5.0)
+
+            # Concatenate BEV + LiDAR → (80, 75)
+            combined_bev = np.concatenate([bev_feat, lidar_feat], axis=1)
+
+            # RadarXF: zero out padding
+            struct_dim = 16
+            valid_mask = np.abs(rxf_feat[:, :struct_dim]).sum(axis=1) > 0
+            rxf_feat[~valid_mask, :] = 0.0
+
+            return (
+                torch.from_numpy(combined_bev),
+                torch.from_numpy(rxf_feat),
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),
+            )
         else:
             obj_feat = self.load_obj_feats(scene_token)
             obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE']) if 'OBJ_FEAT_SIZE' in self.__C.FEAT_SIZE else (80, 69)
@@ -250,6 +316,18 @@ class NuScenes_QA(Data.Dataset):
         elif self.is_radarxf_fusion:
             if feat_type == 'bev':
                 path_map = self.stk2bevpath
+            else:
+                path_map = self.stk2radarxfpath
+
+            if scene_token in path_map:
+                feat = np.load(path_map[scene_token], mmap_mode='r').astype(np.float32)
+            else:
+                return np.zeros(expected_shape, dtype=np.float32)
+        elif self.is_trimodal_fusion:
+            if feat_type == 'bev':
+                path_map = self.stk2bevpath
+            elif feat_type == 'lidar':
+                path_map = self.stk2lidarpath
             else:
                 path_map = self.stk2radarxfpath
 

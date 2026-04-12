@@ -1,0 +1,55 @@
+# ---------------------------------------------------------------
+# Trimodal Fusion Config: Camera BEV + LiDAR BEV + RadarXFormer V2
+# BEV features: (80, 69) | LiDAR BEV: (80, 6) | RadarXF: (100, 48)
+# Option A: Concat LiDAR with BEV → (80, 75), then dual-encoder
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes
+# OBJ_FEAT_SIZE is camera BEV (LiDAR gets concatenated at load time)
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 48]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network — match proven recipe
+LAYER: 3
+HIDDEN_SIZE: 256
+BBOXFEAT_EMB_SIZE: 256
+FF_SIZE: 1024
+MULTI_HEAD: 8
+DROPOUT_R: 0.2
+FLAT_MLP_SIZE: 256
+FLAT_GLIMPSES: 3
+FLAT_OUT_SIZE: 512
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+
+# Training recipe
+BATCH_SIZE: 32
+LR_BASE: 0.00012
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 15]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 20
+EARLY_STOP_PATIENCE: 10
+GRAD_NORM_CLIP: 0.5
+GRAD_ACCU_STEPS: 1
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.3
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+
+# RadarXFormer adapter settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
