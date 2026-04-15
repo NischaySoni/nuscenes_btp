@@ -183,8 +183,19 @@ def train_engine(__C, dataset, dataset_eval=None):
 
     # Count loss config
     count_loss_weight = getattr(__C, 'COUNT_LOSS_WEIGHT', 0.3)
+
+    # Question-type loss weighting
+    # qtype mapping: 0=object, 1=count, 2=exist, 3=comparison, 4=status
+    use_qtype_weights = getattr(__C, 'USE_QTYPE_WEIGHTS', False)
+    if use_qtype_weights:
+        qtype_weight_tensor = torch.tensor([1.5, 2.0, 1.0, 1.0, 1.5], dtype=torch.float32).cuda()
+        # Need per-sample loss for weighting — create unreduced loss_fn
+        label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0)
+        loss_fn_unreduced = nn.CrossEntropyLoss(reduction='none', label_smoothing=label_smoothing)
+        print(f"  [Config] Question-type loss weights: object=1.5, count=2.0, exist=1.0, comparison=1.0, status=1.5")
+
     print(f"  [Config] count_loss_weight={count_loss_weight}, "
-          f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}")
+          f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}, qtype_weights={use_qtype_weights}")
 
     # Training Loop
     for epoch in range(start_epoch, __C.MAX_EPOCH):
@@ -260,7 +271,13 @@ def train_engine(__C, dataset, dataset_eval=None):
                         loss_item[item_ix] = eval('F.' + loss_nonlinear + '(loss_item[item_ix], dim=1)')
 
                 # Primary Loss (with label smoothing if enabled)
-                loss = loss_fn(loss_item[0], loss_item[1])
+                if use_qtype_weights and sub_qtype_iter is not None:
+                    # Per-sample loss with question-type weighting
+                    per_sample_loss = loss_fn_unreduced(loss_item[0], loss_item[1])
+                    sample_weights = qtype_weight_tensor[sub_qtype_iter.clamp(0, 4)]
+                    loss = (per_sample_loss * sample_weights).sum()
+                else:
+                    loss = loss_fn(loss_item[0], loss_item[1])
 
                 # --- Knowledge Distillation Loss ---
                 if teacher_net is not None and teacher_feat_iter is not None:

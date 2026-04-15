@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------
+# Trimodal Fusion V2: Deeper + Wider Architecture
+# Camera BEV + LiDAR BEV + RadarXFormer V2
+# BEV: (80, 69) | LiDAR: (80, 6) | RadarXF: (100, 48)
+# Changes from v1: LAYER 3→4, HIDDEN 256→384, FF 1024→1536
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes (same as v1)
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 48]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network — DEEPER + WIDER than v1
+LAYER: 4
+HIDDEN_SIZE: 384
+BBOXFEAT_EMB_SIZE: 384
+FF_SIZE: 1536
+MULTI_HEAD: 8
+DROPOUT_R: 0.2
+FLAT_MLP_SIZE: 384
+FLAT_GLIMPSES: 3
+FLAT_OUT_SIZE: 768
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+
+# Training recipe — longer schedule for deeper model
+BATCH_SIZE: 32
+LR_BASE: 0.0001
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [12, 18]
+WARMUP_EPOCH: 4
+MAX_EPOCH: 25
+EARLY_STOP_PATIENCE: 12
+GRAD_NORM_CLIP: 0.5
+GRAD_ACCU_STEPS: 1
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+
+# Question-type loss weighting (new)
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer adapter settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
