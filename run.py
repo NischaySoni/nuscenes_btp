@@ -26,6 +26,7 @@ def parse_args():
                            'mcan_radarxf_fusion',
                            'mcan_trimodal_fusion',
                            'mcan_trimodal_v2',
+                           'mcan_trimodal_v3',
                            'mcan_large',
                            'ban_4',
                            'ban_8',

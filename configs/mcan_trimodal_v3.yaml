@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------
+# Trimodal Fusion V3: V1 architecture + question-type weighting
+# Same proven 18.7M param architecture as trimodal_v1
+# but with qtype loss weights for count/status boost
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes (same as v1)
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 48]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network — SAME as v1 (proven to generalize)
+LAYER: 3
+HIDDEN_SIZE: 256
+BBOXFEAT_EMB_SIZE: 256
+FF_SIZE: 1024
+MULTI_HEAD: 8
+DROPOUT_R: 0.2
+FLAT_MLP_SIZE: 256
+FLAT_GLIMPSES: 3
+FLAT_OUT_SIZE: 512
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+
+# Training recipe — slightly longer than v1
+BATCH_SIZE: 32
+LR_BASE: 0.00012
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 15]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 25
+EARLY_STOP_PATIENCE: 12
+GRAD_NORM_CLIP: 0.5
+GRAD_ACCU_STEPS: 1
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+
+# NEW: Question-type loss weighting (proven in V2)
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer adapter settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
