@@ -28,6 +28,7 @@ def parse_args():
                            'mcan_trimodal_v2',
                            'mcan_trimodal_v3',
                            'mcan_trimodal_v4',
+                           'mcan_trimodal_v5',
                            'mcan_large',
                            'ban_4',
                            'ban_8',

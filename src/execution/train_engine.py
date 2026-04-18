@@ -5,6 +5,7 @@
 print(">>> train_engine.py started <<<", flush=True)
 
 import os, torch, datetime, time
+from torch.amp import GradScaler, autocast
 import numpy as np
 import torch.nn as nn
 import torch.utils.data as Data
@@ -197,6 +198,15 @@ def train_engine(__C, dataset, dataset_eval=None):
     print(f"  [Config] count_loss_weight={count_loss_weight}, "
           f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}, qtype_weights={use_qtype_weights}")
 
+    # Mixed Precision (AMP) setup
+    use_amp = getattr(__C, 'USE_AMP', False)
+    scaler = GradScaler('cuda') if use_amp else None
+    if use_amp:
+        print(f"  [Config] Mixed Precision Training (AMP) ENABLED")
+
+    # LR schedule type
+    lr_schedule = getattr(__C, 'LR_SCHEDULE', 'step')
+
     # Training Loop
     for epoch in range(start_epoch, __C.MAX_EPOCH):
 
@@ -204,7 +214,7 @@ def train_engine(__C, dataset, dataset_eval=None):
             logfile.write('=====================================\nnowTime: ' +
                           datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '\n')
 
-        if epoch in __C.LR_DECAY_LIST:
+        if lr_schedule == 'step' and epoch in __C.LR_DECAY_LIST:
             adjust_lr(optim, __C.LR_DECAY_R)
 
         time_start = time.time()
@@ -258,8 +268,12 @@ def train_engine(__C, dataset, dataset_eval=None):
                 else:
                     sub_qtype_iter = None
 
-                # Forward Pass
-                pred = net(sub_obj_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
+                # Forward Pass (with optional AMP)
+                if use_amp:
+                    with autocast('cuda'):
+                        pred = net(sub_obj_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
+                else:
+                    pred = net(sub_obj_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
 
                 # Prepare loss items
                 loss_item = [pred, sub_ans_iter]
@@ -342,7 +356,10 @@ def train_engine(__C, dataset, dataset_eval=None):
                 if __C.LOSS_REDUCTION == 'mean':
                     loss /= __C.GRAD_ACCU_STEPS
 
-                loss.backward()
+                if use_amp:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
                 loss_tmp += loss.cpu().data.numpy() * __C.GRAD_ACCU_STEPS
                 loss_sum += loss.cpu().data.numpy() * __C.GRAD_ACCU_STEPS
@@ -366,7 +383,10 @@ def train_engine(__C, dataset, dataset_eval=None):
                 __C.VERSION, __C.MODEL_USE, epoch + 1, step, int(data_size / __C.BATCH_SIZE),
                 mode_str, loss_tmp / __C.SUB_BATCH_SIZE, optim._rate, extra_info), end='          ')
 
-            # Gradient clipping — always clip for fusion mode
+            # Gradient clipping
+            if use_amp:
+                scaler.unscale_(optim.optimizer)
+
             if __C.GRAD_NORM_CLIP > 0:
                 nn.utils.clip_grad_norm_(net.parameters(), __C.GRAD_NORM_CLIP)
 
@@ -375,7 +395,17 @@ def train_engine(__C, dataset, dataset_eval=None):
                     if named_params[name][1].grad is not None else 0
                 grad_norm[name] += norm_v * __C.GRAD_ACCU_STEPS
 
-            optim.step()
+            if use_amp:
+                scaler.step(optim.optimizer)
+                scaler.update()
+                # Still need to update the LR via our scheduler
+                optim._step += 1
+                rate = optim.rate()
+                for p in optim.optimizer.param_groups:
+                    p['lr'] = rate
+                optim._rate = rate
+            else:
+                optim.step()
 
         time_end = time.time()
         elapse_time = time_end - time_start
