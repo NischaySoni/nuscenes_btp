@@ -318,7 +318,7 @@ class BaseCfgs(PATH):
 
 
         # ------------ Optimizer parameters process
-        assert self.OPT in ['Adam', 'AdamW', 'Adamax', 'RMSprop', 'SGD', 'Adadelta', 'Adagrad']
+        assert self.OPT in ['Adam', 'Adamax', 'RMSprop', 'SGD', 'Adadelta', 'Adagrad']
         optim = getattr(torch.optim, self.OPT)
         default_params_dict = dict(zip(optim.__init__.__code__.co_varnames[3: optim.__init__.__code__.co_argcount],
                                        optim.__init__.__defaults__[1:]))
