@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------
+# Trimodal Fusion V5: Full-scale MCAN matching official paper
+# 
+# Key insight: Official NuScenes-QA (AAAI 2024) uses LAYER=6,
+# HIDDEN=512, FF=2048, FLAT_OUT=1024. Our V1-V4 used exactly 
+# half that capacity (LAYER=3, HIDDEN=256), which is the primary
+# reason we're stuck at 56.5% vs their 59.5-60.4%.
+#
+# Target: 60%+ overall accuracy
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes (same trimodal inputs as v1-v4)
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 48]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network — FULL-SCALE matching official NuScenes-QA paper
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 512
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+
+# Training recipe — matching official paper schedule
+BATCH_SIZE: 32
+LR_BASE: 0.0001
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 15
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific — keep proven enhancements
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+
+# Question-type loss weighting (proven in v3/v4)
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0

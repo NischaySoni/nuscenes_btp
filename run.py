@@ -28,6 +28,8 @@ def parse_args():
                            'mcan_trimodal_v2',
                            'mcan_trimodal_v3',
                            'mcan_trimodal_v4',
+                           'mcan_trimodal_v5',
+                           'mcan_centerpoint_fusion',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -63,7 +65,8 @@ def parse_args():
                              'detected',
                              'radarxf',
                              'radarxf_fusion',
-                             'trimodal_fusion'
+                             'trimodal_fusion',
+                             'centerpoint_fusion'
                             ],
                          help='{'
                               'BEVDet,'

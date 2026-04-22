@@ -50,6 +50,7 @@ class NuScenes_QA(Data.Dataset):
         self.is_fusion = (__C.VISUAL_FEATURE == 'fusion')
         self.is_radarxf_fusion = (__C.VISUAL_FEATURE == 'radarxf_fusion')
         self.is_trimodal_fusion = (__C.VISUAL_FEATURE == 'trimodal_fusion')
+        self.is_centerpoint_fusion = (__C.VISUAL_FEATURE == 'centerpoint_fusion')
         self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected', 'radarxf'))
 
         if self.is_fusion:
@@ -121,6 +122,25 @@ class NuScenes_QA(Data.Dataset):
             print(f'  [Trimodal Fusion] BEV: {len(self.stk2bevpath)}, '
                   f'RadarXF: {len(self.stk2radarxfpath)}, '
                   f'LiDAR: {len(self.stk2lidarpath)}, '
+                  f'Common: {len(common)}')
+
+        elif self.is_centerpoint_fusion:
+            # CenterPoint Fusion: Official CenterPoint features (.npz) + RadarXF
+            cp_dir = __C.FEATS_PATH['centerpoint_fusion']['centerpoint'][split]
+            radarxf_dir = __C.FEATS_PATH['centerpoint_fusion']['radarxf'][split]
+
+            self.stk2cppath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(cp_dir + '/*.npz')
+            }
+            self.stk2radarxfpath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(radarxf_dir + '/*.npy')
+            }
+
+            common = set(self.stk2cppath.keys()) & set(self.stk2radarxfpath.keys())
+            print(f'  [CenterPoint Fusion] CP: {len(self.stk2cppath)}, '
+                  f'RadarXF: {len(self.stk2radarxfpath)}, '
                   f'Common: {len(common)}')
 
         else:
@@ -264,6 +284,39 @@ class NuScenes_QA(Data.Dataset):
 
             return (
                 torch.from_numpy(combined_bev),
+                torch.from_numpy(rxf_feat),
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),
+            )
+        elif self.is_centerpoint_fusion:
+            # CenterPoint Fusion: Official CenterPoint features + RadarXF
+            obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE'])  # (100, 512)
+            rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE'])  # (100, 48)
+            pad_n = obj_shape[0]
+
+            # Load CenterPoint features (.npz)
+            cp_feat = np.zeros(obj_shape, dtype=np.float32)
+            if scene_token in self.stk2cppath:
+                data = np.load(self.stk2cppath[scene_token], allow_pickle=True)
+                det_results = data['results']
+                num_obj = min(len(det_results), pad_n)
+                for i in range(num_obj):
+                    obj = det_results[i]
+                    feat_vec = obj['feats']
+                    feat_dim = min(len(feat_vec), obj_shape[1])
+                    cp_feat[i, :feat_dim] = feat_vec[:feat_dim]
+
+            # Load RadarXF (100, 48)
+            rxf_feat = self._load_feat_safe(scene_token, 'radarxf', rxf_shape)
+
+            # RadarXF: zero out padding
+            struct_dim = 16
+            valid_mask = np.abs(rxf_feat[:, :struct_dim]).sum(axis=1) > 0
+            rxf_feat[~valid_mask, :] = 0.0
+
+            return (
+                torch.from_numpy(cp_feat),
                 torch.from_numpy(rxf_feat),
                 torch.from_numpy(ques_ix),
                 torch.from_numpy(ans),

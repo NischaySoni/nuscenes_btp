@@ -99,12 +99,14 @@ class PATH:
     def check_path(self, vis_feat):
         print('Checking Data Path ........')
 
-        if vis_feat in ['fusion', 'radarxf_fusion', 'trimodal_fusion']:
+        if vis_feat in ['fusion', 'radarxf_fusion', 'trimodal_fusion', 'centerpoint_fusion']:
             # Fusion modes: nested structure
             if vis_feat == 'fusion':
                 sub_feats = ['bev', 'yolo']
             elif vis_feat == 'radarxf_fusion':
                 sub_feats = ['bev', 'radarxf']
+            elif vis_feat == 'centerpoint_fusion':
+                sub_feats = ['centerpoint', 'radarxf']
             else:
                 sub_feats = ['bev', 'radarxf', 'lidar']
             for sub_feat in sub_feats:

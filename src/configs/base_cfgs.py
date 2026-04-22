@@ -104,6 +104,16 @@ class BaseCfgs(PATH):
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/lidar_bev_features',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/lidar_bev_features'
                 }
+            },
+            'centerpoint_fusion': {
+                'centerpoint': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/data/features/CenterPoint',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/data/features/CenterPoint'
+                },
+                'radarxf': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'
+                }
             }
         }
 

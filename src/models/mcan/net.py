@@ -385,7 +385,8 @@ class Net(nn.Module):
 
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
-        self.is_radarxf_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('radarxf_fusion', 'trimodal_fusion'))
+        self.is_centerpoint_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'centerpoint_fusion')
+        self.is_radarxf_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('radarxf_fusion', 'trimodal_fusion', 'centerpoint_fusion'))
         self.is_trimodal_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'trimodal_fusion')
         self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('annot', 'detected'))
         self.is_radarxf = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'radarxf')
@@ -427,7 +428,7 @@ class Net(nn.Module):
             # RADARXF + BEV FUSION MODE
             # ================================================
             rxf_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 48
-            mode_name = 'TRIMODAL_FUSION' if self.is_trimodal_fusion else 'RADARXF_FUSION'
+            mode_name = 'CENTERPOINT_FUSION' if self.is_centerpoint_fusion else ('TRIMODAL_FUSION' if self.is_trimodal_fusion else 'RADARXF_FUSION')
             print(f"  [MCAN] {mode_name} mode: BEV dim={bev_dim}, RadarXF dim={rxf_dim}")
 
             # Adapters
