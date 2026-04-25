@@ -386,6 +386,7 @@ class Net(nn.Module):
         self.__C = __C
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
         self.is_centerpoint_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'centerpoint_fusion')
+        self.is_centerpoint_only = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'centerpoint_only')
         self.is_radarxf_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('radarxf_fusion', 'trimodal_fusion', 'centerpoint_fusion'))
         self.is_trimodal_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'trimodal_fusion')
         self.is_annot = (getattr(__C, 'VISUAL_FEATURE', 'bev') in ('annot', 'detected'))
@@ -396,7 +397,38 @@ class Net(nn.Module):
         # ================================================
         # RADARXFORMER MODE
         # ================================================
-        if self.is_radarxf:
+        if self.is_centerpoint_only:
+            # ================================================
+            # CENTERPOINT-ONLY MODE (matches official paper)
+            # ================================================
+            obj_dim = bev_dim  # 512
+            bbox_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 7
+            use_bbox = getattr(__C, 'USE_BBOX_FEAT', False)
+            print(f"  [MCAN] CENTERPOINT_ONLY mode: obj_dim={obj_dim}, bbox_dim={bbox_dim}, use_bbox={use_bbox}")
+
+            # Object feature projection (official: single Linear)
+            self.obj_proj = nn.Linear(obj_dim, __C.HIDDEN_SIZE)
+
+            # Bbox feature projection (official: single Linear)
+            if use_bbox:
+                self.bbox_proj = nn.Linear(bbox_dim, __C.HIDDEN_SIZE)
+
+            # Single MCAN backbone
+            self.backbone = MCA_ED(__C)
+
+            # Flatten
+            self.attflat_lang = AttFlat(__C)
+            self.attflat_vis = AttFlat(__C)
+
+            # Classify
+            self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
+            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"  [MCAN CenterPoint] Total params: {total_params:,}, Trainable: {trainable:,}")
+
+        elif self.is_radarxf:
             feat_dim = bev_dim  # 48 for radarxf v2 features
             print(f"  [MCAN] RADARXFORMER mode: feat_dim={feat_dim}")
 
@@ -587,7 +619,9 @@ class Net(nn.Module):
         lang_feat = self.embedding(ques_ix)
         lang_feat, _ = self.lstm(lang_feat)
 
-        if self.is_radarxf:
+        if self.is_centerpoint_only:
+            return self._forward_centerpoint(obj_feat, bbox_feat, lang_feat, lang_mask)
+        elif self.is_radarxf:
             return self._forward_radarxf(obj_feat, lang_feat, lang_mask)
         elif self.is_radarxf_fusion:
             return self._forward_radarxf_fusion(obj_feat, bbox_feat, lang_feat, lang_mask)
@@ -597,6 +631,42 @@ class Net(nn.Module):
             return self._forward_annot(obj_feat, lang_feat, lang_mask)
         else:
             return self._forward_single(obj_feat, lang_feat, lang_mask)
+
+
+    def _forward_centerpoint(self, obj_feat, bbox_feat, lang_feat, lang_mask):
+        """
+        CenterPoint-only forward path (matches official NuScenes-QA paper).
+        Single MCAN encoder with CenterPoint per-object features.
+        """
+        # Project object features: (B, N, 512) -> (B, N, 512)
+        vis_feat = self.obj_proj(obj_feat)
+
+        # Optionally add bbox features: (B, N, 7) -> (B, N, 512)
+        if hasattr(self, 'bbox_proj'):
+            vis_feat = vis_feat + self.bbox_proj(bbox_feat)
+
+        # Create mask from raw features
+        vis_mask = make_mask(obj_feat)
+
+        # MCAN encoder
+        lang_out, vis_out = self.backbone(
+            lang_feat, vis_feat, lang_mask, vis_mask
+        )
+
+        # Flatten
+        lang_vec = self.attflat_lang(lang_out, lang_mask)
+        vis_vec = self.attflat_vis(vis_out, vis_mask)
+
+        # Classify
+        proj_feat = lang_vec + vis_vec
+        proj_feat = self.proj_norm(proj_feat)
+        logits = self.proj(proj_feat)
+
+        # Compatibility with training engine
+        self._count_logits = None
+        self._fusion_gate_mean = 0.5
+
+        return logits
 
 
     def _forward_radarxf(self, radarxf_feat, lang_feat, lang_mask):

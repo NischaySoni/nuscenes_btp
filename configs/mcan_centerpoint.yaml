@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------
+# CenterPoint-Only MCAN  (matches official NuScenes-QA baseline)
+#
+# Uses OFFICIAL CenterPoint 512-dim per-object features ONLY.
+# No RadarXF, no dual-encoder. Clean single-encoder MCAN matching
+# the exact architecture from the paper.
+#
+# Expected: ~59.5% (official CenterPoint baseline)
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: centerpoint_only
+
+# CenterPoint features: per-object 512-dim embeddings
+# Padded to 100 objects max
+OBJ_FEAT_SIZE: [100, 512]
+BBOX_FEAT_SIZE: [100, 7]
+
+# Network — match official MCAN baseline exactly
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 2048
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: True
+BBOX_NORMALIZE: False
+
+# Training recipe — match official paper exactly
+BATCH_SIZE: 64
+LR_BASE: 0.0001
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 13
+GRAD_NORM_CLIP: -1
+GRAD_ACCU_STEPS: 2
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9'}
+
+# No fusion
+LABEL_SMOOTHING: 0.0
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: False

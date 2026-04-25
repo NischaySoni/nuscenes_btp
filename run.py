@@ -30,6 +30,7 @@ def parse_args():
                            'mcan_trimodal_v4',
                            'mcan_trimodal_v5',
                            'mcan_centerpoint_fusion',
+                           'mcan_centerpoint',
                            'mcan_large',
                            'ban_4',
                            'ban_8',
@@ -66,7 +67,8 @@ def parse_args():
                              'radarxf',
                              'radarxf_fusion',
                              'trimodal_fusion',
-                             'centerpoint_fusion'
+                             'centerpoint_fusion',
+                             'centerpoint_only'
                             ],
                          help='{'
                               'BEVDet,'

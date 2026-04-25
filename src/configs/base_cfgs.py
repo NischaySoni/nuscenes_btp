@@ -114,6 +114,10 @@ class BaseCfgs(PATH):
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'
                 }
+            },
+            'centerpoint_only': {
+                'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/data/features/CenterPoint',
+                'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/data/features/CenterPoint'
             }
         }
 

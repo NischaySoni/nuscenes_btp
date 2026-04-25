@@ -51,6 +51,7 @@ class NuScenes_QA(Data.Dataset):
         self.is_radarxf_fusion = (__C.VISUAL_FEATURE == 'radarxf_fusion')
         self.is_trimodal_fusion = (__C.VISUAL_FEATURE == 'trimodal_fusion')
         self.is_centerpoint_fusion = (__C.VISUAL_FEATURE == 'centerpoint_fusion')
+        self.is_centerpoint_only = (__C.VISUAL_FEATURE == 'centerpoint_only')
         self.is_annot = (__C.VISUAL_FEATURE in ('annot', 'detected', 'radarxf'))
 
         if self.is_fusion:
@@ -142,6 +143,15 @@ class NuScenes_QA(Data.Dataset):
             print(f'  [CenterPoint Fusion] CP: {len(self.stk2cppath)}, '
                   f'RadarXF: {len(self.stk2radarxfpath)}, '
                   f'Common: {len(common)}')
+
+        elif self.is_centerpoint_only:
+            # CenterPoint-only: load .npz features (official NuScenes-QA format)
+            cp_dir = __C.FEATS_PATH['centerpoint_only'][split]
+            self.stk2cppath = {
+                os.path.basename(p).split('.')[0]: p
+                for p in glob.glob(cp_dir + '/*.npz')
+            }
+            print(f'  [CenterPoint-Only] Loaded {len(self.stk2cppath)} feature files')
 
         else:
             # Single-feature mode: BEV, YOLO, or Annotation
@@ -318,6 +328,34 @@ class NuScenes_QA(Data.Dataset):
             return (
                 torch.from_numpy(cp_feat),
                 torch.from_numpy(rxf_feat),
+                torch.from_numpy(ques_ix),
+                torch.from_numpy(ans),
+                torch.tensor(qtype_ix, dtype=torch.long),
+            )
+        elif self.is_centerpoint_only:
+            # CenterPoint-only: load official .npz features (obj_feat + bbox)
+            obj_shape = tuple(self.__C.FEAT_SIZE['OBJ_FEAT_SIZE'])   # (100, 512)
+            bbox_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) # (100, 7)
+            pad_n = obj_shape[0]
+
+            cp_feat = np.zeros(obj_shape, dtype=np.float32)
+            bbox_feat = np.zeros(bbox_shape, dtype=np.float32)
+
+            if scene_token in self.stk2cppath:
+                data = np.load(self.stk2cppath[scene_token], allow_pickle=True)
+                det_results = data['results']
+                num_obj = min(len(det_results), pad_n)
+                for i in range(num_obj):
+                    obj = det_results[i]
+                    feat_vec = obj['feats']
+                    feat_dim = min(len(feat_vec), obj_shape[1])
+                    cp_feat[i, :feat_dim] = feat_vec[:feat_dim]
+                    box_vec = obj['box'][:7]
+                    bbox_feat[i, :len(box_vec)] = box_vec
+
+            return (
+                torch.from_numpy(cp_feat),
+                torch.from_numpy(bbox_feat),
                 torch.from_numpy(ques_ix),
                 torch.from_numpy(ans),
                 torch.tensor(qtype_ix, dtype=torch.long),
