@@ -399,19 +399,25 @@ class Net(nn.Module):
         # ================================================
         if self.is_centerpoint_only:
             # ================================================
-            # CENTERPOINT-ONLY MODE (matches official paper)
+            # CENTERPOINT-ONLY MODE (matches official paper EXACTLY)
+            # Official Adapter: bbox_linear(7→2048), cat(512,2048)=2560, obj_linear(2560→512)
             # ================================================
             obj_dim = bev_dim  # 512
             bbox_dim = __C.FEAT_SIZE['BBOX_FEAT_SIZE'][1]  # 7
             use_bbox = getattr(__C, 'USE_BBOX_FEAT', False)
-            print(f"  [MCAN] CENTERPOINT_ONLY mode: obj_dim={obj_dim}, bbox_dim={bbox_dim}, use_bbox={use_bbox}")
+            bbox_emb_size = getattr(__C, 'BBOXFEAT_EMB_SIZE', 2048)
 
-            # Object feature projection (official: single Linear)
-            self.obj_proj = nn.Linear(obj_dim, __C.HIDDEN_SIZE)
-
-            # Bbox feature projection (official: single Linear)
+            obj_feat_linear_size = obj_dim
             if use_bbox:
-                self.bbox_proj = nn.Linear(bbox_dim, __C.HIDDEN_SIZE)
+                self.bbox_linear = nn.Linear(bbox_dim, bbox_emb_size)
+                obj_feat_linear_size += bbox_emb_size  # 512 + 2048 = 2560
+
+            self.obj_linear = nn.Linear(obj_feat_linear_size, __C.HIDDEN_SIZE)
+
+            self._use_bbox = use_bbox
+            print(f"  [MCAN] CENTERPOINT_ONLY mode: obj_dim={obj_dim}, bbox_dim={bbox_dim}, "
+                  f"use_bbox={use_bbox}, bbox_emb={bbox_emb_size}, "
+                  f"adapter: {obj_feat_linear_size}→{__C.HIDDEN_SIZE}")
 
             # Single MCAN backbone
             self.backbone = MCA_ED(__C)
@@ -635,18 +641,21 @@ class Net(nn.Module):
 
     def _forward_centerpoint(self, obj_feat, bbox_feat, lang_feat, lang_mask):
         """
-        CenterPoint-only forward path (matches official NuScenes-QA paper).
-        Single MCAN encoder with CenterPoint per-object features.
+        CenterPoint-only forward path (matches official NuScenes-QA paper EXACTLY).
+        Official Adapter: bbox_linear(7→2048), cat(512,2048)=2560, obj_linear(2560→512).
         """
-        # Project object features: (B, N, 512) -> (B, N, 512)
-        vis_feat = self.obj_proj(obj_feat)
+        obj_feat = obj_feat.to(torch.float32)
+        bbox_feat = bbox_feat.to(torch.float32)
 
-        # Optionally add bbox features: (B, N, 7) -> (B, N, 512)
-        if hasattr(self, 'bbox_proj'):
-            vis_feat = vis_feat + self.bbox_proj(bbox_feat)
-
-        # Create mask from raw features
+        # Create mask from raw object features (before any projection)
         vis_mask = make_mask(obj_feat)
+
+        # Official adapter: concatenate bbox embedding with obj features, then project
+        if self._use_bbox:
+            bbox_emb = self.bbox_linear(bbox_feat)        # (B, N, 7) → (B, N, 2048)
+            obj_feat = torch.cat((obj_feat, bbox_emb), dim=-1)  # (B, N, 2560)
+
+        vis_feat = self.obj_linear(obj_feat)              # (B, N, 2560) → (B, N, 512)
 
         # MCAN encoder
         lang_out, vis_out = self.backbone(
