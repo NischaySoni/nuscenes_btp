@@ -14,6 +14,10 @@ from src.utils.optim import get_optim, adjust_lr
 from src.execution.test_engine import test_engine, ckpt_proc
 from src.ops.detection import DetectionModule
 from src.ops.radar_fusion import RadarImageFusion
+from src.datasets.answer_head_mapping import (
+    QTYPE_NAMES, QTYPE_TO_IDX, HEAD_ANSWERS, HEAD_SIZES,
+    build_global_to_local
+)
 
 
 def train_engine(__C, dataset, dataset_eval=None):
@@ -194,8 +198,24 @@ def train_engine(__C, dataset, dataset_eval=None):
         loss_fn_unreduced = nn.CrossEntropyLoss(reduction='none', label_smoothing=label_smoothing)
         print(f"  [Config] Question-type loss weights: object=1.5, count=2.0, exist=1.0, comparison=1.0, status=1.5")
 
+    # Multi-head classification setup
+    use_multi_head = getattr(__C, 'USE_MULTI_HEAD', False)
+    if use_multi_head:
+        # Build global → local answer mapping
+        global_to_local, local_to_global = build_global_to_local(dataset.ans2ix)
+        # Per-head loss functions with label smoothing
+        mh_label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.1)
+        mh_loss_fns = {}
+        for qname in QTYPE_NAMES:
+            mh_loss_fns[qname] = nn.CrossEntropyLoss(
+                reduction='sum', label_smoothing=mh_label_smoothing
+            ).cuda()
+        print(f"  [Config] Multi-head classification ENABLED")
+        print(f"  [Config] Head sizes: {', '.join(f'{k}={HEAD_SIZES[k]}' for k in QTYPE_NAMES)}")
+
     print(f"  [Config] count_loss_weight={count_loss_weight}, "
-          f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}, qtype_weights={use_qtype_weights}")
+          f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}, qtype_weights={use_qtype_weights}, "
+          f"multi_head={use_multi_head}")
 
     # Training Loop
     for epoch in range(start_epoch, __C.MAX_EPOCH):
@@ -261,79 +281,110 @@ def train_engine(__C, dataset, dataset_eval=None):
                 # Forward Pass
                 pred = net(sub_obj_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
 
-                # Prepare loss items
-                loss_item = [pred, sub_ans_iter]
-                loss_nonlinear_list = __C.LOSS_FUNC_NONLINEAR[__C.LOSS_FUNC]
-                for item_ix, loss_nonlinear in enumerate(loss_nonlinear_list):
-                    if loss_nonlinear == 'flat':
-                        loss_item[item_ix] = loss_item[item_ix].view(-1)
-                    elif loss_nonlinear:
-                        loss_item[item_ix] = eval('F.' + loss_nonlinear + '(loss_item[item_ix], dim=1)')
-
-                # Primary Loss (with label smoothing if enabled)
-                if use_qtype_weights and sub_qtype_iter is not None:
-                    # Per-sample loss with question-type weighting
-                    per_sample_loss = loss_fn_unreduced(loss_item[0], loss_item[1])
-                    sample_weights = qtype_weight_tensor[sub_qtype_iter.clamp(0, 4)]
-                    loss = (per_sample_loss * sample_weights).sum()
+                # ============================================
+                # MULTI-HEAD LOSS
+                # ============================================
+                if use_multi_head and sub_qtype_iter is not None:
+                    # pred is a dict: {qtype_name: (B, n_head_classes)}
+                    loss = torch.tensor(0.0, device=sub_ans_iter.device)
+                    batch_n = 0
+                    # qtype weights: exist=1.5, count=2.0, object=1.0, status=1.5, comparison=1.0
+                    mh_qtype_weights = [1.5, 2.0, 1.0, 1.5, 1.0] if use_qtype_weights else [1.0]*5
+                    for qi, qname in enumerate(QTYPE_NAMES):
+                        qmask = (sub_qtype_iter == qi)
+                        if qmask.any():
+                            head_logits = pred[qname][qmask]
+                            # Convert global answer indices to local head indices
+                            global_labels = sub_ans_iter[qmask].view(-1)
+                            local_labels = torch.zeros_like(global_labels)
+                            for j, g_idx in enumerate(global_labels):
+                                g_key = int(g_idx.item())
+                                if g_key in global_to_local:
+                                    _, l_idx = global_to_local[g_key]
+                                    local_labels[j] = l_idx
+                                else:
+                                    local_labels[j] = 0  # fallback
+                            head_loss = mh_loss_fns[qname](head_logits, local_labels)
+                            loss += mh_qtype_weights[qi] * head_loss
+                            batch_n += qmask.sum().item()
+                    # NOTE: No division by batch_n — match original sum-reduction scale
+                # ============================================
+                # ORIGINAL SINGLE-HEAD LOSS (backward compatible)
+                # ============================================
                 else:
-                    loss = loss_fn(loss_item[0], loss_item[1])
+                    loss_item = [pred, sub_ans_iter]
+                    loss_nonlinear_list = __C.LOSS_FUNC_NONLINEAR[__C.LOSS_FUNC]
+                    for item_ix, loss_nonlinear in enumerate(loss_nonlinear_list):
+                        if loss_nonlinear == 'flat':
+                            loss_item[item_ix] = loss_item[item_ix].view(-1)
+                        elif loss_nonlinear:
+                            loss_item[item_ix] = eval('F.' + loss_nonlinear + '(loss_item[item_ix], dim=1)')
 
-                # --- Knowledge Distillation Loss ---
-                if teacher_net is not None and teacher_feat_iter is not None:
-                    # Slice teacher features
-                    sub_teacher_feat_iter = teacher_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
-                    
-                    with torch.no_grad():
-                        teacher_pred = teacher_net(sub_teacher_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
-                    
-                    # KL Divergence Loss: T=2.0
-                    T = 2.0
-                    student_log_probs = F.log_softmax(pred / T, dim=1)
-                    teacher_probs = F.softmax(teacher_pred / T, dim=1)
-                    kd_loss = F.kl_div(student_log_probs, teacher_probs, reduction='sum') * (T * T)
-                    
-                    # Scale down CE and add KD logic (alpha=0.2, beta=0.8)
-                    loss = 0.2 * loss + 0.8 * kd_loss
+                    # Primary Loss (with label smoothing if enabled)
+                    if use_qtype_weights and sub_qtype_iter is not None:
+                        # Per-sample loss with question-type weighting
+                        per_sample_loss = loss_fn_unreduced(loss_item[0], loss_item[1])
+                        sample_weights = qtype_weight_tensor[sub_qtype_iter.clamp(0, 4)]
+                        loss = (per_sample_loss * sample_weights).sum()
+                    else:
+                        loss = loss_fn(loss_item[0], loss_item[1])
 
-                # ================================================
-                # CORRECT Count Loss — uses question type, not answer index
-                # ================================================
-                actual_net = net.module if hasattr(net, 'module') else net
+                    # --- Knowledge Distillation Loss ---
+                    if teacher_net is not None and teacher_feat_iter is not None:
+                        # Slice teacher features
+                        sub_teacher_feat_iter = teacher_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
+                        
+                        with torch.no_grad():
+                            teacher_pred = teacher_net(sub_teacher_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
+                        
+                        # KL Divergence Loss: T=2.0
+                        T = 2.0
+                        student_log_probs = F.log_softmax(pred / T, dim=1)
+                        teacher_probs = F.softmax(teacher_pred / T, dim=1)
+                        kd_loss = F.kl_div(student_log_probs, teacher_probs, reduction='sum') * (T * T)
+                        
+                        # Scale down CE and add KD logic (alpha=0.2, beta=0.8)
+                        loss = 0.2 * loss + 0.8 * kd_loss
 
-                if sub_qtype_iter is not None and is_fusion:
-                    # count questions have qtype == 1
-                    count_mask = (sub_qtype_iter == 1)
+                    # ================================================
+                    # CORRECT Count Loss — uses question type, not answer index
+                    # ================================================
+                    actual_net = net.module if hasattr(net, 'module') else net
 
-                    if count_mask.any():
-                        pred_logits = loss_item[0] if loss_item[0].dim() > 1 else pred
-                        true_ans = loss_item[1].view(-1)
+                    if sub_qtype_iter is not None and is_fusion:
+                        # count questions have qtype == 1
+                        count_mask = (sub_qtype_iter == 1)
 
-                        # 1) Soft expected-value count loss (differentiable)
-                        count_probs = torch.softmax(pred_logits[:, :11], dim=1)  # (B, 11)
-                        count_indices = torch.arange(11, dtype=torch.float32, device=pred_logits.device)
-                        expected_count = (count_probs * count_indices.unsqueeze(0)).sum(dim=1)
-                        true_count = true_ans.float()
-                        soft_count_loss = F.smooth_l1_loss(
-                            expected_count[count_mask],
-                            true_count[count_mask].clamp(0, 10)
-                        )
-                        loss = loss + count_loss_weight * soft_count_loss
+                        if count_mask.any():
+                            pred_logits = loss_item[0] if loss_item[0].dim() > 1 else pred
+                            true_ans = loss_item[1].view(-1)
 
-                        # 2) Auxiliary count head loss (fusion model)
-                        if hasattr(actual_net, '_count_logits') and actual_net._count_logits is not None:
-                            count_logits = actual_net._count_logits
-                            count_targets = true_ans[count_mask].clamp(0, 10)
-                            count_ce_loss = F.cross_entropy(
-                                count_logits[count_mask],
-                                count_targets
+                            # 1) Soft expected-value count loss (differentiable)
+                            count_probs = torch.softmax(pred_logits[:, :11], dim=1)  # (B, 11)
+                            count_indices = torch.arange(11, dtype=torch.float32, device=pred_logits.device)
+                            expected_count = (count_probs * count_indices.unsqueeze(0)).sum(dim=1)
+                            true_count = true_ans.float()
+                            soft_count_loss = F.smooth_l1_loss(
+                                expected_count[count_mask],
+                                true_count[count_mask].clamp(0, 10)
                             )
-                            loss = loss + count_loss_weight * count_ce_loss
-                            count_loss_sum += count_ce_loss.item()
-                            count_loss_steps += 1
+                            loss = loss + count_loss_weight * soft_count_loss
+
+                            # 2) Auxiliary count head loss (fusion model)
+                            if hasattr(actual_net, '_count_logits') and actual_net._count_logits is not None:
+                                count_logits = actual_net._count_logits
+                                count_targets = true_ans[count_mask].clamp(0, 10)
+                                count_ce_loss = F.cross_entropy(
+                                    count_logits[count_mask],
+                                    count_targets
+                                )
+                                loss = loss + count_loss_weight * count_ce_loss
+                                count_loss_sum += count_ce_loss.item()
+                                count_loss_steps += 1
 
 
                 # Track fusion gate values for diagnostics
+                actual_net = net.module if hasattr(net, 'module') else net
                 if hasattr(actual_net, '_fusion_gate_mean'):
                     gate_sum += actual_net._fusion_gate_mean
                     gate_count += 1

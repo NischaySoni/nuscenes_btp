@@ -7,6 +7,9 @@
 #   1. RadarXFormerAdapter: dual-stream encoder for structured + CLIP features
 #   2. SpatialPositionalEncoding: 3D position encoding (spherical + Cartesian)
 #   3. Iterative refinement: cross-object attention → re-attend to language
+#
+# Multi-Head Classifier (v6):
+#   Per-question-type classification heads to eliminate cross-type confusion
 # ------------------------------------------------------------------
 
 import torch
@@ -17,6 +20,9 @@ import math
 from src.ops.fc import MLP
 from src.ops.layer_norm import LayerNorm
 from src.models.mcan.mca import MCA_ED, SGA, SA
+from src.datasets.answer_head_mapping import (
+    QTYPE_NAMES, QTYPE_TO_IDX, HEAD_SIZES, HEAD_ANSWERS
+)
 
 
 # ------------------------------------------------
@@ -373,6 +379,40 @@ class CountHead(nn.Module):
         return self.count_mlp(combined)
 
 
+# ------------------------------------------------
+# Multi-Head Classifier
+# ------------------------------------------------
+
+class MultiHeadClassifier(nn.Module):
+    """
+    Per-question-type classification heads.
+    Each head predicts only among its own answer subset:
+      exist:      2 (yes/no)
+      count:     11 (0-10)
+      object:    10 (vehicle/pedestrian categories)
+      status:     7 (moving/parked/stopped/...)
+      comparison: 2 (yes/no)
+    """
+
+    def __init__(self, input_dim, dropout_r=0.1):
+        super(MultiHeadClassifier, self).__init__()
+        self.heads = nn.ModuleDict()
+        for qtype_name in QTYPE_NAMES:
+            n_classes = HEAD_SIZES[qtype_name]
+            self.heads[qtype_name] = nn.Sequential(
+                nn.Dropout(dropout_r),
+                nn.Linear(input_dim, input_dim // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout_r),
+                nn.Linear(input_dim // 2, n_classes),
+            )
+        print(f"  [MultiHead] heads: {', '.join(f'{k}={HEAD_SIZES[k]}' for k in QTYPE_NAMES)}")
+
+    def forward(self, feat):
+        """Returns dict: {qtype_name: (B, n_classes)}"""
+        return {name: head(feat) for name, head in self.heads.items()}
+
+
 # ================================================
 # Main MCAN Model
 # ================================================
@@ -384,6 +424,7 @@ class Net(nn.Module):
         super(Net, self).__init__()
 
         self.__C = __C
+        self.use_multi_head = getattr(__C, 'USE_MULTI_HEAD', False)
         self.is_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'fusion')
         self.is_centerpoint_fusion = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'centerpoint_fusion')
         self.is_centerpoint_only = (getattr(__C, 'VISUAL_FEATURE', 'bev') == 'centerpoint_only')
@@ -428,7 +469,10 @@ class Net(nn.Module):
 
             # Classify
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+            if self.use_multi_head:
+                self.multi_head = MultiHeadClassifier(__C.FLAT_OUT_SIZE, __C.DROPOUT_R)
+            else:
+                self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -455,7 +499,10 @@ class Net(nn.Module):
 
             # --- Classification ---
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+            if self.use_multi_head:
+                self.multi_head = MultiHeadClassifier(__C.FLAT_OUT_SIZE, __C.DROPOUT_R)
+            else:
+                self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -503,7 +550,10 @@ class Net(nn.Module):
 
             # Classify
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+            if self.use_multi_head:
+                self.multi_head = MultiHeadClassifier(__C.FLAT_OUT_SIZE, __C.DROPOUT_R)
+            else:
+                self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
             # Dedicated count head (11 classes for counts 0-10)
             self.count_head = nn.Sequential(
@@ -546,7 +596,10 @@ class Net(nn.Module):
             self.count_head = CountHead(__C)
 
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+            if self.use_multi_head:
+                self.multi_head = MultiHeadClassifier(__C.FLAT_OUT_SIZE, __C.DROPOUT_R)
+            else:
+                self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -561,7 +614,10 @@ class Net(nn.Module):
             self.attflat_lang = AttFlat(__C)
             self.attflat_vis = AttFlat(__C)
             self.proj_norm = LayerNorm(__C.FLAT_OUT_SIZE)
-            self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
+            if self.use_multi_head:
+                self.multi_head = MultiHeadClassifier(__C.FLAT_OUT_SIZE, __C.DROPOUT_R)
+            else:
+                self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
             total_params = sum(p.numel() for p in self.parameters())
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -669,12 +725,15 @@ class Net(nn.Module):
         # Classify
         proj_feat = lang_vec + vis_vec
         proj_feat = self.proj_norm(proj_feat)
-        logits = self.proj(proj_feat)
 
         # Compatibility with training engine
         self._count_logits = None
         self._fusion_gate_mean = 0.5
 
+        if self.use_multi_head:
+            return self.multi_head(proj_feat)
+
+        logits = self.proj(proj_feat)
         return logits
 
 
@@ -697,12 +756,15 @@ class Net(nn.Module):
         # ---- Classify ----
         proj_feat = lang_vec + vis_vec
         proj_feat = self.proj_norm(proj_feat)
-        logits = self.proj(proj_feat)
 
         # Dummy values for training engine compatibility
         self._count_logits = None
         self._fusion_gate_mean = getattr(self.radarxf_adapter, '_gate_mean', 0.5)
 
+        if self.use_multi_head:
+            return self.multi_head(proj_feat)
+
+        logits = self.proj(proj_feat)
         return logits
 
 
@@ -743,12 +805,15 @@ class Net(nn.Module):
         # Classify
         proj_feat = lang_vec + fused_visual
         proj_feat = self.proj_norm(proj_feat)
-        logits = self.proj(proj_feat)
 
         # Dedicated count head
         self._count_logits = self.count_head(proj_feat)
         self._fusion_gate_mean = 0.5
 
+        if self.use_multi_head:
+            return self.multi_head(proj_feat)
+
+        logits = self.proj(proj_feat)
         return logits
 
 
@@ -783,12 +848,15 @@ class Net(nn.Module):
         bev_residual = self.bev_residual_weight * bev_vec
         proj_feat = lang_vec + fused_visual + bev_residual
         proj_feat = self.proj_norm(proj_feat)
-        logits = self.proj(proj_feat)
 
         count_logits = self.count_head(fused_visual, lang_vec)
         self._count_logits = count_logits
         self._fusion_gate_mean = 0.5
 
+        if self.use_multi_head:
+            return self.multi_head(proj_feat)
+
+        logits = self.proj(proj_feat)
         return logits
 
 
@@ -806,11 +874,14 @@ class Net(nn.Module):
 
         proj_feat = lang_vec + vis_vec
         proj_feat = self.proj_norm(proj_feat)
-        logits = self.proj(proj_feat)
 
         self._count_logits = None
         self._fusion_gate_mean = 0.0
 
+        if self.use_multi_head:
+            return self.multi_head(proj_feat)
+
+        logits = self.proj(proj_feat)
         return logits
 
 

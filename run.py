@@ -29,6 +29,7 @@ def parse_args():
                            'mcan_trimodal_v3',
                            'mcan_trimodal_v4',
                            'mcan_trimodal_v5',
+                           'mcan_trimodal_v6',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',

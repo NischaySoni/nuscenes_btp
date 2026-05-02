@@ -10,6 +10,10 @@ import torch.utils.data as Data
 
 from src.models.model_loader import ModelLoader
 from src.execution.result_eval import Eval
+from src.datasets.answer_head_mapping import (
+    QTYPE_NAMES, QTYPE_TO_IDX, HEAD_ANSWERS, HEAD_SIZES,
+    build_global_to_local
+)
 
 
 # -------------------------------------------------------
@@ -80,6 +84,12 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
 
     os.makedirs("./outputs/attention", exist_ok=True)
 
+    # Multi-head setup
+    use_multi_head = getattr(__C, 'USE_MULTI_HEAD', False)
+    if use_multi_head:
+        _, local_to_global = build_global_to_local(dataset.ans2ix)
+        print(f"  [Eval] Multi-head mode: routing predictions through per-type heads")
+
     # ---------------- Evaluation Loop ----------------
 
     for step, batch in enumerate(dataloader):
@@ -92,8 +102,10 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
         # Handle both 5-tuple and 4-tuple
         if len(batch) == 5:
             obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter, qtype_iter = batch
+            qtype_iter = qtype_iter.cuda()
         else:
             obj_feat_iter, bbox_feat_iter, ques_ix_iter, ans_iter = batch
+            qtype_iter = None
 
         obj_feat_iter = obj_feat_iter.cuda()
         bbox_feat_iter = bbox_feat_iter.cuda()
@@ -105,7 +117,35 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
             ques_ix_iter
         )
 
-        pred_idx = torch.argmax(pred, dim=1)
+        # ---- Multi-head prediction decoding ----
+        if use_multi_head and isinstance(pred, dict) and qtype_iter is not None:
+            # pred is dict: {qtype_name: (B, n_head_classes)}
+            batch_size_actual = obj_feat_iter.size(0)
+            pred_idx = torch.zeros(batch_size_actual, dtype=torch.long, device='cuda')
+            # Also build a fake "global logits" tensor for backward compat
+            ans_size = dataset.ans_size
+            pred_global_logits = torch.full((batch_size_actual, ans_size), -1e9, device='cuda')
+
+            for qi, qname in enumerate(QTYPE_NAMES):
+                qmask = (qtype_iter == qi)
+                if qmask.any():
+                    head_logits = pred[qname][qmask]  # (n_matched, head_size)
+                    local_preds = head_logits.argmax(dim=1)  # (n_matched,)
+                    # Map local head predictions back to global answer indices
+                    for j, idx_val in enumerate(qmask.nonzero(as_tuple=True)[0]):
+                        local_pred = int(local_preds[j].item())
+                        key = (qi, local_pred)
+                        if key in local_to_global:
+                            global_pred = local_to_global[key]
+                        else:
+                            global_pred = 0  # fallback
+                        pred_idx[idx_val] = global_pred
+                        pred_global_logits[idx_val, global_pred] = 1.0  # mark as chosen
+
+        else:
+            # Standard single-head prediction
+            pred_idx = torch.argmax(pred, dim=1)
+            pred_global_logits = pred
 
         # ------------------------------------------------
         # Save predictions for analysis
@@ -155,7 +195,7 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
         # Standard evaluation
         # ------------------------------------------------
 
-        pred_np = pred.cpu().data.numpy()
+        pred_np = pred_global_logits.cpu().data.numpy() if use_multi_head else pred.cpu().data.numpy()
 
         pred_argmax = np.argmax(pred_np, axis=1)
 
