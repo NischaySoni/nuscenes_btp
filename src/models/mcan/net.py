@@ -397,16 +397,33 @@ class MultiHeadClassifier(nn.Module):
     def __init__(self, input_dim, dropout_r=0.1):
         super(MultiHeadClassifier, self).__init__()
         self.heads = nn.ModuleDict()
+        # Hard tasks (object, status) get deeper heads for fine-grained discrimination
+        hard_types = {'object', 'status'}
         for qtype_name in QTYPE_NAMES:
             n_classes = HEAD_SIZES[qtype_name]
-            self.heads[qtype_name] = nn.Sequential(
-                nn.Dropout(dropout_r),
-                nn.Linear(input_dim, input_dim // 2),
-                nn.ReLU(inplace=True),
-                nn.Dropout(dropout_r),
-                nn.Linear(input_dim // 2, n_classes),
-            )
+            if qtype_name in hard_types:
+                # 3-layer deep head: input → input → input//2 → classes
+                self.heads[qtype_name] = nn.Sequential(
+                    nn.Dropout(dropout_r),
+                    nn.Linear(input_dim, input_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout_r),
+                    nn.Linear(input_dim, input_dim // 2),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout_r),
+                    nn.Linear(input_dim // 2, n_classes),
+                )
+            else:
+                # Standard 2-layer head for easy tasks
+                self.heads[qtype_name] = nn.Sequential(
+                    nn.Dropout(dropout_r),
+                    nn.Linear(input_dim, input_dim // 2),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout_r),
+                    nn.Linear(input_dim // 2, n_classes),
+                )
         print(f"  [MultiHead] heads: {', '.join(f'{k}={HEAD_SIZES[k]}' for k in QTYPE_NAMES)}")
+        print(f"  [MultiHead] deep heads for: {', '.join(hard_types)}")
 
     def forward(self, feat):
         """Returns dict: {qtype_name: (B, n_classes)}"""

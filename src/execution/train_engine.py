@@ -18,6 +18,7 @@ from src.datasets.answer_head_mapping import (
     QTYPE_NAMES, QTYPE_TO_IDX, HEAD_ANSWERS, HEAD_SIZES,
     build_global_to_local
 )
+from src.ops.focal_loss import FocalLoss
 
 
 def train_engine(__C, dataset, dataset_eval=None):
@@ -192,26 +193,39 @@ def train_engine(__C, dataset, dataset_eval=None):
     # qtype mapping: 0=object, 1=count, 2=exist, 3=comparison, 4=status
     use_qtype_weights = getattr(__C, 'USE_QTYPE_WEIGHTS', False)
     if use_qtype_weights:
-        qtype_weight_tensor = torch.tensor([1.5, 2.0, 1.0, 1.0, 1.5], dtype=torch.float32).cuda()
+        # Boosted weights for object and status to force the model to focus on them
+        qtype_weight_tensor = torch.tensor([3.0, 2.0, 1.0, 1.0, 3.0], dtype=torch.float32).cuda()
         # Need per-sample loss for weighting — create unreduced loss_fn
         label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.0)
         loss_fn_unreduced = nn.CrossEntropyLoss(reduction='none', label_smoothing=label_smoothing)
-        print(f"  [Config] Question-type loss weights: object=1.5, count=2.0, exist=1.0, comparison=1.0, status=1.5")
+        print(f"  [Config] Question-type loss weights: object=3.0, count=2.0, exist=1.0, comparison=1.0, status=3.0")
 
     # Multi-head classification setup
     use_multi_head = getattr(__C, 'USE_MULTI_HEAD', False)
     if use_multi_head:
         # Build global → local answer mapping
         global_to_local, local_to_global = build_global_to_local(dataset.ans2ix)
-        # Per-head loss functions with label smoothing
+        # Per-head loss functions:
+        #   - Focal Loss for hard tasks (object, status) to fight class imbalance
+        #   - Standard CE for easy tasks (exist, count, comparison)
         mh_label_smoothing = getattr(__C, 'LABEL_SMOOTHING', 0.1)
+        focal_gamma = getattr(__C, 'FOCAL_GAMMA', 2.0)
+        focal_heads = {'object', 'status'}
         mh_loss_fns = {}
         for qname in QTYPE_NAMES:
-            mh_loss_fns[qname] = nn.CrossEntropyLoss(
-                reduction='sum', label_smoothing=mh_label_smoothing
-            ).cuda()
+            if qname in focal_heads:
+                mh_loss_fns[qname] = FocalLoss(
+                    gamma=focal_gamma,
+                    label_smoothing=mh_label_smoothing,
+                    reduction='sum'
+                ).cuda()
+            else:
+                mh_loss_fns[qname] = nn.CrossEntropyLoss(
+                    reduction='sum', label_smoothing=mh_label_smoothing
+                ).cuda()
         print(f"  [Config] Multi-head classification ENABLED")
         print(f"  [Config] Head sizes: {', '.join(f'{k}={HEAD_SIZES[k]}' for k in QTYPE_NAMES)}")
+        print(f"  [Config] Focal Loss (gamma={focal_gamma}) on: {', '.join(focal_heads)}")
 
     print(f"  [Config] count_loss_weight={count_loss_weight}, "
           f"grad_clip={__C.GRAD_NORM_CLIP}, fusion={is_fusion}, qtype_weights={use_qtype_weights}, "
@@ -288,8 +302,9 @@ def train_engine(__C, dataset, dataset_eval=None):
                     # pred is a dict: {qtype_name: (B, n_head_classes)}
                     loss = torch.tensor(0.0, device=sub_ans_iter.device)
                     batch_n = 0
-                    # qtype weights: exist=1.5, count=2.0, object=1.0, status=1.5, comparison=1.0
-                    mh_qtype_weights = [1.5, 2.0, 1.0, 1.5, 1.0] if use_qtype_weights else [1.0]*5
+                    # qtype weights: exist=1.0, count=2.0, object=3.0, status=3.0, comparison=1.0
+                    # Note: QTYPE_NAMES order is ['exist', 'count', 'object', 'status', 'comparison']
+                    mh_qtype_weights = [1.0, 2.0, 3.0, 3.0, 1.0] if use_qtype_weights else [1.0]*5
                     for qi, qname in enumerate(QTYPE_NAMES):
                         qmask = (sub_qtype_iter == qi)
                         if qmask.any():
