@@ -670,20 +670,37 @@ class Net(nn.Module):
             self.proj = nn.Linear(__C.FLAT_OUT_SIZE, answer_size)
 
         # ---- Language (shared) ----
+        self.use_distilbert = getattr(__C, 'USE_DISTILBERT', False)
 
-        self.embedding = nn.Embedding(
-            num_embeddings=token_size,
-            embedding_dim=__C.WORD_EMBED_SIZE
-        )
-        self.embedding.weight.data.copy_(
-            torch.from_numpy(pretrained_emb)
-        )
-        self.lstm = nn.LSTM(
-            input_size=__C.WORD_EMBED_SIZE,
-            hidden_size=__C.HIDDEN_SIZE,
-            num_layers=1,
-            batch_first=True
-        )
+        if self.use_distilbert:
+            # DistilBERT: frozen transformer encoder + learnable projection
+            from transformers import DistilBertModel
+            self.distilbert = DistilBertModel.from_pretrained('distilbert-base-uncased')
+            # Freeze all DistilBERT parameters
+            for param in self.distilbert.parameters():
+                param.requires_grad = False
+            # Project from 768 → HIDDEN_SIZE
+            self.lang_proj = nn.Sequential(
+                nn.Linear(768, __C.HIDDEN_SIZE),
+                nn.ReLU(inplace=True),
+                nn.Dropout(__C.DROPOUT_R),
+            )
+            print(f"  [Language] DistilBERT (frozen) + proj(768→{__C.HIDDEN_SIZE})")
+        else:
+            self.embedding = nn.Embedding(
+                num_embeddings=token_size,
+                embedding_dim=__C.WORD_EMBED_SIZE
+            )
+            self.embedding.weight.data.copy_(
+                torch.from_numpy(pretrained_emb)
+            )
+            self.lstm = nn.LSTM(
+                input_size=__C.WORD_EMBED_SIZE,
+                hidden_size=__C.HIDDEN_SIZE,
+                num_layers=1,
+                batch_first=True
+            )
+            print(f"  [Language] GloVe({__C.WORD_EMBED_SIZE}) + LSTM({__C.HIDDEN_SIZE})")
 
 
     def forward(self, obj_feat, bbox_feat, ques_ix):
@@ -694,9 +711,17 @@ class Net(nn.Module):
         """
 
         # ---- Language ----
-        lang_mask = make_mask(ques_ix.unsqueeze(2))
-        lang_feat = self.embedding(ques_ix)
-        lang_feat, _ = self.lstm(lang_feat)
+        if self.use_distilbert:
+            # ques_ix contains DistilBERT input_ids; derive attention_mask from pad tokens (id=0)
+            attention_mask = (ques_ix != 0).long()
+            with torch.no_grad():
+                bert_out = self.distilbert(input_ids=ques_ix, attention_mask=attention_mask)
+            lang_feat = self.lang_proj(bert_out.last_hidden_state)  # (B, T, HIDDEN_SIZE)
+            lang_mask = (1 - attention_mask).unsqueeze(1).unsqueeze(2).bool()  # (B, 1, 1, T)
+        else:
+            lang_mask = make_mask(ques_ix.unsqueeze(2))
+            lang_feat = self.embedding(ques_ix)
+            lang_feat, _ = self.lstm(lang_feat)
 
         if self.is_centerpoint_only:
             return self._forward_centerpoint(obj_feat, bbox_feat, lang_feat, lang_mask)

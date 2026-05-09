@@ -165,8 +165,20 @@ class NuScenes_QA(Data.Dataset):
         # --------------------------
         # ---- Tokenization ----
         # --------------------------
-        self.token2ix, self.pretrained_emb = self.tokenize(qa_dict)
-        self.token_size = len(self.token2ix)
+        self.use_distilbert = getattr(__C, 'USE_DISTILBERT', False)
+
+        if self.use_distilbert:
+            from transformers import DistilBertTokenizer
+            self.bert_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+            self.bert_max_len = 30  # max subword tokens
+            # Still need token2ix/pretrained_emb for model init (even though BERT won't use them)
+            self.token2ix = {'PAD': 0, 'UNK': 1}
+            self.pretrained_emb = np.zeros((2, __C.WORD_EMBED_SIZE), dtype=np.float32)
+            self.token_size = 2
+            print(f'  [Language] Using DistilBERT tokenizer (max_len={self.bert_max_len})')
+        else:
+            self.token2ix, self.pretrained_emb = self.tokenize(qa_dict)
+            self.token_size = len(self.token2ix)
 
         # --------------------------
         # ---- Answer dict ----
@@ -505,7 +517,10 @@ class NuScenes_QA(Data.Dataset):
         ques = item['question']
         scene_token = item['sample_token']
 
-        ques_ix = self.proc_ques(ques, max_token=30)
+        if self.use_distilbert:
+            ques_ix = self.proc_ques_distilbert(ques)
+        else:
+            ques_ix = self.proc_ques(ques, max_token=30)
 
         ans = np.zeros(1, np.int64)
         if self.__C.RUN_MODE == 'train':
@@ -583,3 +598,17 @@ class NuScenes_QA(Data.Dataset):
             ques_ix[ix] = self.token2ix.get(word, self.token2ix['UNK'])
 
         return ques_ix
+
+
+    def proc_ques_distilbert(self, ques):
+        """Tokenize question using DistilBERT tokenizer.
+        Returns input_ids as int64 numpy array, padded/truncated to bert_max_len.
+        """
+        encoded = self.bert_tokenizer(
+            ques,
+            max_length=self.bert_max_len,
+            padding='max_length',
+            truncation=True,
+            return_tensors='np',
+        )
+        return encoded['input_ids'][0].astype(np.int64)  # (bert_max_len,)
