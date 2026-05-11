@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.utils.data as Data
 
-from src.configs.base_cfgs import Cfgs
+from src.models.mcan.model_cfgs import Cfgs
 from src.models.model_loader import ModelLoader
 from src.datasets.nuscenes_qa import NuScenes_QA
 from src.execution.result_eval import Eval
@@ -154,18 +154,46 @@ def get_logits(model_spec, gpu_id):
         pin_memory=__C.PIN_MEM
     )
 
+    # Check for multi-head
+    use_multi_head = getattr(__C, 'USE_MULTI_HEAD', False)
+    if use_multi_head:
+        from src.datasets.answer_head_mapping import (
+            QTYPE_NAMES, HEAD_ANSWERS, build_global_to_local
+        )
+        _, local_to_global = build_global_to_local(dataset.ans2ix)
+        print(f"  [Ensemble] Multi-head mode detected")
+
     all_logits = []
     for step, batch in enumerate(dataloader):
         if len(batch) == 5:
             obj_feat, bbox_feat, ques_ix, ans, qtype = batch
+            qtype = qtype.cuda()
         else:
             obj_feat, bbox_feat, ques_ix, ans = batch
+            qtype = None
 
         obj_feat = obj_feat.cuda()
         bbox_feat = bbox_feat.cuda()
         ques_ix = ques_ix.cuda()
 
         logits = net(obj_feat, bbox_feat, ques_ix)
+
+        # Convert multi-head dict to global logits tensor
+        if isinstance(logits, dict):
+            B = obj_feat.size(0)
+            global_logits = torch.full((B, dataset.ans_size), -1e9, device='cuda')
+            for qi, qname in enumerate(QTYPE_NAMES):
+                head_logits = logits[qname]  # (B, n_head_classes)
+                for local_idx in range(head_logits.size(1)):
+                    key = (qi, local_idx)
+                    if key in local_to_global:
+                        global_idx = local_to_global[key]
+                        # Use max to handle yes/no shared between exist and comparison
+                        global_logits[:, global_idx] = torch.max(
+                            global_logits[:, global_idx], head_logits[:, local_idx]
+                        )
+            logits = global_logits
+
         all_logits.append(logits.cpu().numpy())
 
         if step % 500 == 0:
