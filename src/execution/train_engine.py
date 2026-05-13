@@ -55,23 +55,62 @@ def train_engine(__C, dataset, dataset_eval=None):
     use_kd = (getattr(__C, 'USE_KD', 'False') == 'True')
     if use_kd:
         print(">>> Setting up Knowledge Distillation Teacher Model <<<")
-        teacher_net = ModelLoader(__C).Net(__C, pretrained_emb, token_size, ans_size)
+
+        teacher_config_path = getattr(__C, 'TEACHER_CONFIG', None)
+        if teacher_config_path and os.path.exists(teacher_config_path):
+            # Build teacher with ITS OWN config (different architecture)
+            import yaml as _yaml
+            from src.models.mcan.model_cfgs import Cfgs as TeacherCfgs
+            teacher_C = TeacherCfgs()
+            with open(teacher_config_path, 'r') as f:
+                teacher_cfg_dict = _yaml.safe_load(f)
+            for key, val in teacher_cfg_dict.items():
+                setattr(teacher_C, key, val)
+            # Propagate runtime settings
+            teacher_C.GPU = __C.GPU
+            teacher_C.N_GPU = __C.N_GPU
+            teacher_C.DEVICES = __C.DEVICES
+            teacher_C.RUN_MODE = __C.RUN_MODE
+            teacher_C.SPLIT = __C.SPLIT
+            # Set teacher feature sizes
+            teacher_C.FEAT_SIZE = {
+                'OBJ_FEAT_SIZE': tuple(teacher_C.OBJ_FEAT_SIZE),
+            }
+            if hasattr(teacher_C, 'BBOX_FEAT_SIZE'):
+                teacher_C.FEAT_SIZE['BBOX_FEAT_SIZE'] = tuple(teacher_C.BBOX_FEAT_SIZE)
+
+            print(f"  [KD] Teacher config: {teacher_config_path}")
+            print(f"  [KD] Teacher arch: LAYER={teacher_C.LAYER}, HIDDEN={teacher_C.HIDDEN_SIZE}, "
+                  f"VISUAL={teacher_C.VISUAL_FEATURE}")
+
+            # Teacher uses the SAME tokenizer as student (shared vocab)
+            teacher_net = ModelLoader(teacher_C).Net(
+                teacher_C, pretrained_emb, token_size, ans_size
+            )
+        else:
+            # Fallback: teacher uses same config as student
+            print("  [KD] No TEACHER_CONFIG — using student config for teacher")
+            teacher_net = ModelLoader(__C).Net(__C, pretrained_emb, token_size, ans_size)
+
         teacher_net.cuda()
         teacher_net.eval()
-        
+
         teacher_ckpt_path = getattr(__C, 'TEACHER_CKPT', None)
         if teacher_ckpt_path and os.path.exists(teacher_ckpt_path):
-            print(f"Loading Teacher Checkpoint from {teacher_ckpt_path}")
+            print(f"  [KD] Loading Teacher Checkpoint from {teacher_ckpt_path}")
             teacher_ckpt = torch.load(teacher_ckpt_path)
-            if __C.N_GPU > 1:
-                teacher_net.load_state_dict(ckpt_proc(teacher_ckpt['state_dict']))
-            else:
-                teacher_net.load_state_dict(teacher_ckpt['state_dict'])
+            teacher_net.load_state_dict(teacher_ckpt['state_dict'])
+            print(f"  [KD] Teacher loaded successfully!")
         else:
-            print(f"WARNING: Teacher Checkpoint NOT FOUND at {teacher_ckpt_path}! KD will use random teacher.")
-            
+            print(f"  [KD] WARNING: Teacher Checkpoint NOT FOUND at {teacher_ckpt_path}!")
+            print(f"  [KD] KD will NOT work correctly. Train the teacher first.")
+
         for param in teacher_net.parameters():
             param.requires_grad = False
+
+        kd_alpha = getattr(__C, 'KD_ALPHA', 0.3)
+        kd_temperature = getattr(__C, 'KD_TEMPERATURE', 2.0)
+        print(f"  [KD] alpha={kd_alpha} (CE weight), temperature={kd_temperature}")
     # ---------------------------------------
 
     if __C.N_GPU > 1:
@@ -348,18 +387,33 @@ def train_engine(__C, dataset, dataset_eval=None):
                     if teacher_net is not None and teacher_feat_iter is not None:
                         # Slice teacher features
                         sub_teacher_feat_iter = teacher_feat_iter[accu_step * __C.SUB_BATCH_SIZE : (accu_step + 1) * __C.SUB_BATCH_SIZE]
-                        
+
+                        # Teacher needs its own dummy bbox feat (shape differs from student)
+                        teacher_bbox = torch.zeros(
+                            sub_teacher_feat_iter.size(0),
+                            sub_teacher_feat_iter.size(1), 4,
+                            device=sub_teacher_feat_iter.device
+                        )
+
                         with torch.no_grad():
-                            teacher_pred = teacher_net(sub_teacher_feat_iter, sub_bbox_feat_iter, sub_ques_ix_iter)
-                        
-                        # KL Divergence Loss: T=2.0
-                        T = 2.0
-                        student_log_probs = F.log_softmax(pred / T, dim=1)
+                            teacher_pred = teacher_net(sub_teacher_feat_iter, teacher_bbox, sub_ques_ix_iter)
+
+                        # Handle multi-head teacher output → flatten to global logits
+                        if isinstance(teacher_pred, dict):
+                            # Shouldn't happen (teacher is single-head annot), but handle gracefully
+                            teacher_pred = list(teacher_pred.values())[0]
+
+                        # Get student logits (if multi-head, use the raw pred before routing)
+                        student_logits = pred if not isinstance(pred, dict) else loss_item[0]
+
+                        # KL Divergence Loss with configurable temperature
+                        T = kd_temperature
+                        student_log_probs = F.log_softmax(student_logits / T, dim=1)
                         teacher_probs = F.softmax(teacher_pred / T, dim=1)
-                        kd_loss = F.kl_div(student_log_probs, teacher_probs, reduction='sum') * (T * T)
-                        
-                        # Scale down CE and add KD logic (alpha=0.2, beta=0.8)
-                        loss = 0.2 * loss + 0.8 * kd_loss
+                        kd_loss_val = F.kl_div(student_log_probs, teacher_probs, reduction='sum') * (T * T)
+
+                        # Weighted combination: alpha * CE + (1 - alpha) * KD
+                        loss = kd_alpha * loss + (1.0 - kd_alpha) * kd_loss_val
 
                     # ================================================
                     # CORRECT Count Loss — uses question type, not answer index

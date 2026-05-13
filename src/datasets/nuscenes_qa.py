@@ -379,7 +379,9 @@ class NuScenes_QA(Data.Dataset):
 
             # --- Knowledge Distillation ---
             if getattr(self.__C, 'USE_KD', 'False') == 'True' and self.__C.RUN_MODE == 'train':
-                teacher_feat = self._load_feat_safe(scene_token, 'annot', obj_shape)
+                # Teacher features use ANNOTATION shape (100, 16), not student shape
+                teacher_shape = tuple(getattr(self.__C, 'TEACHER_FEAT_SHAPE', [100, 16]))
+                teacher_feat = self._load_feat_safe(scene_token, 'annot', teacher_shape)
                 return (
                     torch.from_numpy(obj_feat),
                     torch.from_numpy(teacher_feat), # Extra tensor for KD
