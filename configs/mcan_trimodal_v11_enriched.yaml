@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------
+# Trimodal Fusion V11: Category-Enriched Features
+# 
+# Addresses the root cause: BEV features lack category info.
+# 
+# Enrichments:
+#   - RadarXF: one-hot category (23d) + attribute (9d) appended
+#     (100, 48) → (100, 80)
+#   - BEV: scene-level category histogram (23d) appended
+#     (80, 75) → (80, 98)
+#
+# This makes category/attribute info EXPLICIT instead of relying
+# on the model to discover it through cross-attention.
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes (ENRICHED dimensions)
+OBJ_FEAT_SIZE: [80, 98]
+BBOX_FEAT_SIZE: [100, 80]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 512
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+WORD_EMBED_SIZE: 300
+
+# ★ Feature enrichment ON
+ENRICH_FEATURES: True
+
+# Language / classifier
+USE_DISTILBERT: False
+USE_MULTI_HEAD: False
+
+# Training recipe
+BATCH_SIZE: 32
+LR_BASE: 0.0001
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 15
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0

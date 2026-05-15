@@ -275,7 +275,12 @@ class NuScenes_QA(Data.Dataset):
             # Trimodal: BEV + LiDAR (concatenated) + RadarXF
             camera_bev_dim = getattr(self.__C, 'CAMERA_BEV_DIM', 69)
             lidar_shape = tuple(getattr(self.__C, 'LIDAR_FEAT_SIZE', [80, 6]))
-            rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (100, 48)
+
+            # When enriching, load with ORIGINAL file dimensions (not enriched model dims)
+            if getattr(self.__C, 'ENRICH_FEATURES', False):
+                rxf_shape = (100, 48)  # original RadarXF file shape on disk
+            else:
+                rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (100, 48)
 
             # Load camera BEV (80, 69)
             bev_feat = self._load_feat_safe(scene_token, 'bev', (lidar_shape[0], camera_bev_dim))
@@ -303,6 +308,38 @@ class NuScenes_QA(Data.Dataset):
             struct_dim = 16
             valid_mask = np.abs(rxf_feat[:, :struct_dim]).sum(axis=1) > 0
             rxf_feat[~valid_mask, :] = 0.0
+
+            # ============================================================
+            # Feature Enrichment: make category/attribute info explicit
+            # ============================================================
+            if getattr(self.__C, 'ENRICH_FEATURES', False):
+                n_cats = 23   # NuScenes categories
+                n_attrs = 9   # NuScenes attributes
+
+                # --- Enrich RadarXF: one-hot category + attribute ---
+                cat_ids = rxf_feat[:, 0].astype(int).clip(0, n_cats - 1)
+                attr_ids = rxf_feat[:, 1].astype(int).clip(0, n_attrs - 1)
+
+                cat_onehot = np.zeros((rxf_feat.shape[0], n_cats), dtype=np.float32)
+                attr_onehot = np.zeros((rxf_feat.shape[0], n_attrs), dtype=np.float32)
+
+                for i in range(rxf_feat.shape[0]):
+                    if valid_mask[i]:
+                        cat_onehot[i, cat_ids[i]] = 1.0
+                        attr_onehot[i, attr_ids[i]] = 1.0
+
+                # Append: (100, 48) + (100, 23) + (100, 9) → (100, 80)
+                rxf_feat = np.concatenate([rxf_feat, cat_onehot, attr_onehot], axis=1)
+
+                # --- Enrich BEV: scene-level category histogram ---
+                cat_histogram = cat_onehot[valid_mask].sum(axis=0) if valid_mask.any() else np.zeros(n_cats)
+                total_objs = cat_histogram.sum()
+                if total_objs > 0:
+                    cat_histogram = cat_histogram / total_objs
+
+                # Broadcast scene context to every BEV row: (80, 23)
+                scene_ctx = np.tile(cat_histogram, (combined_bev.shape[0], 1))
+                combined_bev = np.concatenate([combined_bev, scene_ctx], axis=1)
 
             return (
                 torch.from_numpy(combined_bev),
