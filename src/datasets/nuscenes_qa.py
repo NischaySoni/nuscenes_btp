@@ -119,10 +119,21 @@ class NuScenes_QA(Data.Dataset):
                 for p in glob.glob(lidar_dir + '/*.npy')
             }
 
+            # Map features (optional)
+            self.stk2mappath = {}
+            if getattr(__C, 'USE_MAP_FEATURES', False):
+                map_dir = __C.FEATS_PATH['trimodal_fusion']['map'][split]
+                self.stk2mappath = {
+                    os.path.basename(p).split('.')[0]: p
+                    for p in glob.glob(map_dir + '/*.npy')
+                }
+
             common = set(self.stk2bevpath.keys()) & set(self.stk2radarxfpath.keys()) & set(self.stk2lidarpath.keys())
+            map_count = len(self.stk2mappath)
             print(f'  [Trimodal Fusion] BEV: {len(self.stk2bevpath)}, '
                   f'RadarXF: {len(self.stk2radarxfpath)}, '
                   f'LiDAR: {len(self.stk2lidarpath)}, '
+                  f'Map: {map_count}, '
                   f'Common: {len(common)}')
 
         elif self.is_centerpoint_fusion:
@@ -341,6 +352,15 @@ class NuScenes_QA(Data.Dataset):
                 scene_ctx = np.tile(cat_histogram, (combined_bev.shape[0], 1))
                 combined_bev = np.concatenate([combined_bev, scene_ctx], axis=1)
 
+            # ============================================================
+            # Map-Prior Integration: append map context to RadarXF
+            # ============================================================
+            if getattr(self.__C, 'USE_MAP_FEATURES', False):
+                map_dim = getattr(self.__C, 'MAP_DIM', 11)
+                map_feat = self._load_feat_safe(scene_token, 'map', (rxf_feat.shape[0], map_dim))
+                # Concatenate: (100, 48) + (100, 11) → (100, 59)
+                rxf_feat = np.concatenate([rxf_feat, map_feat], axis=1)
+
             return (
                 torch.from_numpy(combined_bev),
                 torch.from_numpy(rxf_feat),
@@ -470,6 +490,8 @@ class NuScenes_QA(Data.Dataset):
                 path_map = self.stk2bevpath
             elif feat_type == 'lidar':
                 path_map = self.stk2lidarpath
+            elif feat_type == 'map':
+                path_map = getattr(self, 'stk2mappath', {})
             else:
                 path_map = self.stk2radarxfpath
 
