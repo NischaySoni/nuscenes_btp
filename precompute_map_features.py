@@ -14,8 +14,8 @@ Output shape: (MAX_OBJECTS, MAP_DIM) per sample — aligned with RadarXF feature
 so each object gets its own map context.
 
 Usage:
-    python precompute_map_features.py
-    python precompute_map_features.py --data-root /path/to/nuscenes
+    python precompute_map_features.py --workers 16
+    python precompute_map_features.py --data-root /path/to/nuscenes --workers 8
 """
 
 import os
@@ -35,8 +35,9 @@ RXF_DIR = "/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_f
 MAX_OBJECTS = 100
 MAP_DIM = 11  # number of map context features per object
 
-# Map layer names for querying
-POINT_LAYERS = ['drivable_area', 'walkway', 'road_segment', 'parking', 'ped_crossing', 'stop_line']
+# Valid NuScenes polygon layers (verified from NuScenesMap source code)
+POLYGON_LAYERS = ['drivable_area', 'road_segment', 'road_block', 'lane',
+                  'ped_crossing', 'walkway', 'stop_line', 'carpark_area']
 
 
 # ============================================================
@@ -47,40 +48,44 @@ def get_map_features_for_point(nusc_map, x_global, y_global):
     """
     Query the semantic map at a single global (x, y) point.
     Returns a MAP_DIM-length feature vector.
+
+    IMPORTANT: layers_on_point() returns Dict[str, str] where:
+      - key = layer name
+      - value = token string (non-empty = point IS on layer, '' = NOT on layer)
     """
     features = np.zeros(MAP_DIM, dtype=np.float32)
 
-    # --- Binary: is the point inside each layer? ---
+    # --- Binary: is the point inside each polygon layer? ---
     try:
-        layers_at_point = nusc_map.layers_on_point(x_global, y_global)
+        # Returns {layer_name: token_or_empty_string}
+        layers_result = nusc_map.layers_on_point(x_global, y_global)
     except Exception:
-        layers_at_point = []
+        layers_result = {}
 
-    layer_set = set(layers_at_point)
-    features[0] = 1.0 if 'drivable_area' in layer_set else 0.0
-    features[1] = 1.0 if 'walkway' in layer_set else 0.0
-    features[2] = 1.0 if 'road_segment' in layer_set else 0.0
-    features[3] = 1.0 if 'parking' in layer_set else 0.0
+    # A non-empty token string means the point IS on that layer
+    features[0] = 1.0 if layers_result.get('drivable_area', '') != '' else 0.0
+    features[1] = 1.0 if layers_result.get('walkway', '') != '' else 0.0
+    features[2] = 1.0 if layers_result.get('road_segment', '') != '' else 0.0
+    features[3] = 1.0 if layers_result.get('carpark_area', '') != '' else 0.0
 
     # --- Distance-based: nearest crosswalk, stop line ---
     try:
-        # Get records within a search radius
+        # get_records_in_radius returns {layer_name: [list of tokens]}
         nearby = nusc_map.get_records_in_radius(x_global, y_global, 20.0, ['ped_crossing', 'stop_line'])
 
         # Pedestrian crossing
-        if 'ped_crossing' in nearby and len(nearby['ped_crossing']) > 0:
+        ped_tokens = nearby.get('ped_crossing', [])
+        if len(ped_tokens) > 0:
             features[4] = 1.0  # near crosswalk
-            # Approximate distance (just use a flag + count)
-            features[7] = min(1.0, 5.0 / (1.0 + len(nearby['ped_crossing'])))
+            features[7] = min(1.0, 5.0 / (1.0 + len(ped_tokens)))
         else:
             features[4] = 0.0
-            features[7] = 1.0  # far from crosswalk (normalized)
+            features[7] = 1.0  # far from crosswalk
 
         # Stop line
-        if 'stop_line' in nearby and len(nearby['stop_line']) > 0:
-            features[5] = 1.0
-        else:
-            features[5] = 0.0
+        stop_tokens = nearby.get('stop_line', [])
+        features[5] = 1.0 if len(stop_tokens) > 0 else 0.0
+
     except Exception:
         features[4] = 0.0
         features[5] = 0.0
@@ -88,40 +93,44 @@ def get_map_features_for_point(nusc_map, x_global, y_global):
 
     # --- Distance to road edge ---
     try:
-        if 'road_segment' in layer_set:
-            features[6] = 0.0  # on road = 0 distance
+        if features[2] > 0.5:  # already on road_segment
+            features[6] = 0.0
         else:
-            # Not on road — compute approximate distance
             road_records = nusc_map.get_records_in_radius(x_global, y_global, 30.0, ['road_segment'])
-            if 'road_segment' in road_records and len(road_records['road_segment']) > 0:
+            road_tokens = road_records.get('road_segment', [])
+            if len(road_tokens) > 0:
                 features[6] = 0.3  # nearby road
             else:
                 features[6] = 1.0  # far from road
     except Exception:
         features[6] = 0.5
 
-    # --- Lane direction ---
+    # --- Lane direction (using discretized lane centerline) ---
     try:
         closest_lane = nusc_map.get_closest_lane(x_global, y_global, radius=10.0)
         if closest_lane:
-            lane_record = nusc_map.get_arcline_path(closest_lane)
-            if lane_record and len(lane_record) > 0:
-                # Get direction from first segment
-                pose = lane_record[0]
-                heading = pose.get('heading', 0.0) if isinstance(pose, dict) else 0.0
-                features[8] = np.sin(heading)
-                features[9] = np.cos(heading)
+            # get_arcline_path returns List[ArcLinePath dicts]
+            # Use discretize_lanes to get actual (x, y, yaw) poses
+            discrete = nusc_map.discretize_lanes([closest_lane], 0.5)
+            if closest_lane in discrete and len(discrete[closest_lane]) > 1:
+                poses = discrete[closest_lane]
+                # Each pose is (x, y, yaw)
+                # Find the pose closest to our query point
+                poses_arr = np.array(poses)
+                dists = np.linalg.norm(poses_arr[:, :2] - [x_global, y_global], axis=1)
+                closest_idx = np.argmin(dists)
+                yaw = poses_arr[closest_idx, 2]  # yaw/heading in radians
+                features[8] = np.sin(yaw)
+                features[9] = np.cos(yaw)
     except Exception:
         features[8] = 0.0
         features[9] = 0.0
 
     # --- Number of lanes nearby ---
     try:
-        nearby_lanes = nusc_map.get_records_in_radius(x_global, y_global, 10.0, ['lane'])
-        if 'lane' in nearby_lanes:
-            features[10] = min(1.0, len(nearby_lanes['lane']) / 6.0)  # normalized
-        else:
-            features[10] = 0.0
+        nearby_lanes = nusc_map.get_records_in_radius(x_global, y_global, 10.0, ['lane', 'lane_connector'])
+        n_lanes = len(nearby_lanes.get('lane', [])) + len(nearby_lanes.get('lane_connector', []))
+        features[10] = min(1.0, n_lanes / 6.0)  # normalized
     except Exception:
         features[10] = 0.0
 
@@ -266,11 +275,20 @@ def main():
         print("  https://www.nuscenes.org/download")
         return
 
+    # --- Sanity check: verify map features work correctly ---
+    print("\n--- Sanity Check ---")
+    test_map = list(nusc_maps.values())[0]
+    test_result = test_map.layers_on_point(300.0, 1700.0)
+    print(f"  layers_on_point(300, 1700) = {test_result}")
+    print(f"  Type: {type(test_result)}")
+    for k, v in test_result.items():
+        print(f"    {k}: '{v}' (on_layer={v != ''})")
+
     # --- Check existing (for resume) ---
     existing = set()
     if os.path.exists(args.out_dir):
         existing = {f.replace('.npy', '') for f in os.listdir(args.out_dir) if f.endswith('.npy')}
-    print(f"Found {len(existing)} existing map features, will skip those")
+    print(f"\nFound {len(existing)} existing map features, will skip those")
 
     # --- Collect all tokens ---
     tokens_to_process = []

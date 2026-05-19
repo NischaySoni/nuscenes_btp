@@ -287,8 +287,8 @@ class NuScenes_QA(Data.Dataset):
             camera_bev_dim = getattr(self.__C, 'CAMERA_BEV_DIM', 69)
             lidar_shape = tuple(getattr(self.__C, 'LIDAR_FEAT_SIZE', [80, 6]))
 
-            # When enriching, load with ORIGINAL file dimensions (not enriched model dims)
-            if getattr(self.__C, 'ENRICH_FEATURES', False):
+            # When enriching or using map features, load with ORIGINAL file dimensions
+            if getattr(self.__C, 'ENRICH_FEATURES', False) or getattr(self.__C, 'USE_MAP_FEATURES', False):
                 rxf_shape = (100, 48)  # original RadarXF file shape on disk
             else:
                 rxf_shape = tuple(self.__C.FEAT_SIZE['BBOX_FEAT_SIZE']) if 'BBOX_FEAT_SIZE' in self.__C.FEAT_SIZE else (100, 48)
@@ -549,6 +549,11 @@ class NuScenes_QA(Data.Dataset):
 
                 # Ensure empty padding slots remain STRICTLY ZERO to keep attention masks working
                 feat[~valid_mask, :] = 0.0
+
+            elif feat_type == 'map':
+                # Map features are pre-computed binary/normalized values in [0, 1].
+                # Do NOT z-score normalize — it would destroy the clean 0/1 signals.
+                pass
 
             else:
                 # BEV / annot / detected: global z-score normalization
