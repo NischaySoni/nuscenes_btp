@@ -37,6 +37,7 @@ def parse_args():
                            'mcan_radarxf_small',
                            'mcan_detected_small',
                            'mcan_trimodal_v12_map',
+                           'mcan_trimodal_v13_bert_map',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',
