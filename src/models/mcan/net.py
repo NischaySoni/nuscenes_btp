@@ -673,19 +673,32 @@ class Net(nn.Module):
         self.use_distilbert = getattr(__C, 'USE_DISTILBERT', False)
 
         if self.use_distilbert:
-            # DistilBERT: frozen transformer encoder + learnable projection
+            # DistilBERT: transformer encoder + learnable projection
             from transformers import DistilBertModel
             self.distilbert = DistilBertModel.from_pretrained('distilbert-base-uncased')
-            # Freeze all DistilBERT parameters
+
+            # Freeze strategy: freeze all, then optionally unfreeze last N layers
             for param in self.distilbert.parameters():
                 param.requires_grad = False
+
+            finetune_layers = getattr(__C, 'BERT_FINETUNE_LAYERS', 0)
+            if finetune_layers > 0:
+                # Unfreeze the last N transformer layers for domain adaptation
+                total_layers = len(self.distilbert.transformer.layer)
+                for i in range(total_layers - finetune_layers, total_layers):
+                    for param in self.distilbert.transformer.layer[i].parameters():
+                        param.requires_grad = True
+                freeze_label = f"last {finetune_layers} layers trainable"
+            else:
+                freeze_label = "frozen"
+
             # Project from 768 → HIDDEN_SIZE
             self.lang_proj = nn.Sequential(
                 nn.Linear(768, __C.HIDDEN_SIZE),
                 nn.ReLU(inplace=True),
                 nn.Dropout(__C.DROPOUT_R),
             )
-            print(f"  [Language] DistilBERT (frozen) + proj(768→{__C.HIDDEN_SIZE})")
+            print(f"  [Language] DistilBERT ({freeze_label}) + proj(768→{__C.HIDDEN_SIZE})")
         else:
             self.embedding = nn.Embedding(
                 num_embeddings=token_size,
@@ -714,8 +727,14 @@ class Net(nn.Module):
         if self.use_distilbert:
             # ques_ix contains DistilBERT input_ids; derive attention_mask from pad tokens (id=0)
             attention_mask = (ques_ix != 0).long()
-            with torch.no_grad():
+            finetune_layers = getattr(self.__C, 'BERT_FINETUNE_LAYERS', 0)
+            if finetune_layers > 0:
+                # Gradients flow through unfrozen layers
                 bert_out = self.distilbert(input_ids=ques_ix, attention_mask=attention_mask)
+            else:
+                # Fully frozen — save memory
+                with torch.no_grad():
+                    bert_out = self.distilbert(input_ids=ques_ix, attention_mask=attention_mask)
             lang_feat = self.lang_proj(bert_out.last_hidden_state)  # (B, T, HIDDEN_SIZE)
             lang_mask = (1 - attention_mask).unsqueeze(1).unsqueeze(2).bool()  # (B, 1, 1, T)
         else:
