@@ -40,6 +40,8 @@ def parse_args():
                            'mcan_trimodal_v13_bert_map',
                            'mcan_trimodal_v14_bert_ft',
                            'mcan_trimodal_v15_bert_mh',
+                           'mcan_trimodal_v16_bert_deep',
+                           'mcan_trimodal_v17_bert_enriched',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',
