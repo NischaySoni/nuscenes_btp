@@ -182,16 +182,26 @@ def get_logits(model_spec, gpu_id):
         if isinstance(logits, dict):
             B = obj_feat.size(0)
             global_logits = torch.full((B, dataset.ans_size), -1e9, device='cuda')
+
             for qi, qname in enumerate(QTYPE_NAMES):
+                # Only process samples whose question type matches this head
+                if qtype is not None:
+                    qmask = (qtype == qi)
+                    if not qmask.any():
+                        continue
+                    matched_indices = qmask.nonzero(as_tuple=True)[0]
+                else:
+                    # No qtype info — fall back to all samples (shouldn't happen)
+                    matched_indices = torch.arange(B, device='cuda')
+
                 head_logits = logits[qname]  # (B, n_head_classes)
                 for local_idx in range(head_logits.size(1)):
                     key = (qi, local_idx)
                     if key in local_to_global:
                         global_idx = local_to_global[key]
-                        # Use max to handle yes/no shared between exist and comparison
-                        global_logits[:, global_idx] = torch.max(
-                            global_logits[:, global_idx], head_logits[:, local_idx]
-                        )
+                        global_logits[matched_indices, global_idx] = \
+                            head_logits[matched_indices, local_idx]
+
             logits = global_logits
 
         all_logits.append(logits.cpu().numpy())
@@ -202,6 +212,10 @@ def get_logits(model_spec, gpu_id):
     print(f"\r  Inference: [{len(dataloader)}/{len(dataloader)}] Done!")
     all_logits = np.concatenate(all_logits, axis=0)
     print(f"  Logits shape: {all_logits.shape}")
+
+    # Free GPU memory before next model
+    del net
+    torch.cuda.empty_cache()
 
     return all_logits, dataset
 
