@@ -42,6 +42,8 @@ def parse_args():
                            'mcan_trimodal_v15_bert_mh',
                            'mcan_trimodal_v16_bert_deep',
                            'mcan_trimodal_v17_bert_enriched',
+                           'mcan_trimodal_v18_bert_base',
+                           'mcan_trimodal_v19_seed2',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',

@@ -177,12 +177,20 @@ class NuScenes_QA(Data.Dataset):
         # ---- Tokenization ----
         # --------------------------
         self.use_distilbert = getattr(__C, 'USE_DISTILBERT', False)
+        self.use_bert = getattr(__C, 'USE_BERT', False)
 
-        if self.use_distilbert:
+        if self.use_bert:
+            from transformers import BertTokenizer
+            self.bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+            self.bert_max_len = 30
+            self.token2ix = {'PAD': 0, 'UNK': 1}
+            self.pretrained_emb = np.zeros((2, __C.WORD_EMBED_SIZE), dtype=np.float32)
+            self.token_size = 2
+            print(f'  [Language] Using BERT-base tokenizer (max_len={self.bert_max_len})')
+        elif self.use_distilbert:
             from transformers import DistilBertTokenizer
             self.bert_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-            self.bert_max_len = 30  # max subword tokens
-            # Still need token2ix/pretrained_emb for model init (even though BERT won't use them)
+            self.bert_max_len = 30
             self.token2ix = {'PAD': 0, 'UNK': 1}
             self.pretrained_emb = np.zeros((2, __C.WORD_EMBED_SIZE), dtype=np.float32)
             self.token_size = 2
@@ -583,7 +591,7 @@ class NuScenes_QA(Data.Dataset):
         ques = item['question']
         scene_token = item['sample_token']
 
-        if self.use_distilbert:
+        if self.use_bert or self.use_distilbert:
             ques_ix = self.proc_ques_distilbert(ques)
         else:
             ques_ix = self.proc_ques(ques, max_token=30)
