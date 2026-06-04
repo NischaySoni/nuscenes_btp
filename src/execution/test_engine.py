@@ -68,6 +68,9 @@ def test_engine(__C, dataset, state_dict=None, save_eval_result=False):
     if __C.N_GPU > 1:
         net = nn.DataParallel(net, device_ids=__C.DEVICES)
 
+    # Remap old checkpoint keys: distilbert.* → bert_model.* (code was refactored)
+    state_dict = {k.replace('distilbert.', 'bert_model.'): v for k, v in state_dict.items()}
+
     net.load_state_dict(state_dict)
 
     # ---------------- DataLoader ----------------

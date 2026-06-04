@@ -141,6 +141,14 @@ def get_logits(model_spec, gpu_id):
         dataset.token_size,
         dataset.ans_size
     )
+
+    # Remap old checkpoint keys: distilbert.* → bert_model.* (code was refactored)
+    remapped = {}
+    for k, v in state_dict.items():
+        new_k = k.replace('distilbert.', 'bert_model.')
+        remapped[new_k] = v
+    state_dict = remapped
+
     net.cuda()
     net.eval()
     net.load_state_dict(state_dict)

@@ -143,10 +143,11 @@ def train_engine(__C, dataset, dataset_eval=None):
         print(' ========== Fine-Tuning from:', path)
         if os.path.exists(path):
             ckpt = torch.load(path)
+            sd = {k.replace('distilbert.', 'bert_model.'): v for k, v in ckpt['state_dict'].items()}
             if __C.N_GPU > 1:
-                net.load_state_dict(ckpt_proc(ckpt['state_dict']), strict=False)
+                net.load_state_dict(ckpt_proc(sd), strict=False)
             else:
-                net.load_state_dict(ckpt['state_dict'], strict=False)
+                net.load_state_dict(sd, strict=False)
             print('Successfully loaded weights! Initializing fresh optimizer for Epoch 0.')
             
             # --- FREEZE REASONING BACKBONE ---
@@ -183,11 +184,12 @@ def train_engine(__C, dataset, dataset_eval=None):
             print('Loading ckpt from {}'.format(path))
             ckpt = torch.load(path)
             print('Finish!')
+            sd = {k.replace('distilbert.', 'bert_model.'): v for k, v in ckpt['state_dict'].items()}
 
             if __C.N_GPU > 1:
-                net.load_state_dict(ckpt_proc(ckpt['state_dict']))
+                net.load_state_dict(ckpt_proc(sd))
             else:
-                net.load_state_dict(ckpt['state_dict'])
+                net.load_state_dict(sd)
 
             start_epoch = ckpt['epoch']
             optim = get_optim(__C, net, data_size, ckpt['lr_base'])

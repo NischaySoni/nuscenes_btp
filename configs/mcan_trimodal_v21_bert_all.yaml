@@ -1,0 +1,75 @@
+# ---------------------------------------------------------------
+# Trimodal V21: BERT-base + Enriched Features + Multi-Head
+# 
+# The "everything combined" model:
+#   - BERT-base (12 layers, richest language model)
+#   - Enriched features (explicit category + attribute one-hot)
+#   - Map features (spatial context)
+#   - Multi-head classifier (specialized per question type)
+#
+# RadarXF: (100, 48) + cat(23) + attr(9) + map(11) = (100, 91)
+# BEV: (80, 69) + lidar(6) + scene_hist(23) = (80, 98)
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes — enriched + map
+OBJ_FEAT_SIZE: [80, 98]
+BBOX_FEAT_SIZE: [100, 91]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 512
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+WORD_EMBED_SIZE: 300
+
+# BERT-base with 4 layers fine-tuned
+USE_BERT: True
+USE_DISTILBERT: False
+BERT_FINETUNE_LAYERS: 4
+
+# ★ Everything enabled
+USE_MAP_FEATURES: True
+MAP_DIM: 11
+ENRICH_FEATURES: True
+
+# Multi-head classifier
+USE_MULTI_HEAD: True
+
+# Training recipe
+BATCH_SIZE: 32
+LR_BASE: 0.00003
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 15
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
