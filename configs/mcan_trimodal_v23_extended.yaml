@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------
+# Trimodal V23: BERT-base + MultiHead + EXTENDED TRAINING (25 epochs)
+# 
+# Same as V18 (best BERT-base model) but trained for 25 epochs
+# with additional LR decay at epoch 20. Our models plateau at
+# epoch 12-13 because LR is already very low. A third decay
+# at epoch 20 lets the model fine-tune further.
+#
+# This is the "patient training" approach — sometimes models
+# need more time to learn fine-grained distinctions.
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+# Feature sizes
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 59]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# Network (same as V18)
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 512
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+WORD_EMBED_SIZE: 300
+
+# BERT-base with 4 layers fine-tuned
+USE_BERT: True
+USE_DISTILBERT: False
+BERT_FINETUNE_LAYERS: 4
+
+# Map features
+USE_MAP_FEATURES: True
+MAP_DIM: 11
+ENRICH_FEATURES: False
+
+# Multi-head classifier
+USE_MULTI_HEAD: True
+
+# ★ Extended training: 25 epochs with 3 LR decay steps
+BATCH_SIZE: 32
+LR_BASE: 0.00005
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12, 20]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 25
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+# Fusion-specific
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: True
+
+# RadarXFormer settings
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
