@@ -1,0 +1,93 @@
+{ BATCH_SIZE        }->32
+{ BBOXFEAT_EMB_SIZE }->256
+{ BBOX_FEAT_SIZE    }->[100, 4]
+{ BBOX_NORMALIZE    }->False
+{ CKPTS_PATH        }->./outputs/ckpts
+{ CKPT_EPOCH        }->0
+{ CKPT_PATH         }->None
+{ CKPT_VERSION      }->9076212
+{ COUNT_LOSS_WEIGHT }->0.0
+{ CROSS_MODAL_LAYERS }->0
+{ DATA_ROOT         }->./data
+{ DEVICES           }->[0]
+{ DROPOUT_R         }->0.2
+{ EARLY_STOP_PATIENCE }->10
+{ EVAL_BATCH_SIZE   }->16
+{ EVAL_FREQUENCY    }->3
+{ FEATS_PATH        }->{'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}, 'fusion': {'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}}, 'annot': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'}, 'detected': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features'}}
+{ FEAT_SIZE         }->{'OBJ_FEAT_SIZE': (100, 16), 'BBOX_FEAT_SIZE': (100, 4)}
+{ FF_SIZE           }->1024
+{ FINETUNE_FROM     }->./outputs/ckpts/ckpt_annot_v1/epoch16.pkl
+{ FLAT_GLIMPSES     }->3
+{ FLAT_MLP_SIZE     }->256
+{ FLAT_OUT_SIZE     }->512
+{ FREEZE_BACKBONE   }->True
+{ FUSE_RADAR_DATA   }->False
+{ GPU               }->0
+{ GRAD_ACCU_STEPS   }->1
+{ GRAD_NORM_CLIP    }->0.5
+{ HIDDEN_SIZE       }->256
+{ LABEL_SMOOTHING   }->0.1
+{ LAYER             }->3
+{ LOG_PATH          }->./outputs/log
+{ LOSS_FUNC         }->ce
+{ LOSS_FUNC_NAME_DICT }->{'ce': 'CrossEntropyLoss', 'bce': 'BCEWithLogitsLoss', 'kld': 'KLDivLoss', 'mse': 'MSELoss'}
+{ LOSS_FUNC_NONLINEAR }->{'ce': [None, 'flat'], 'bce': [None, None], 'kld': ['log_softmax', None], 'mse': [None, None]}
+{ LOSS_REDUCTION    }->sum
+{ LR_BASE           }->1.5e-05
+{ LR_DECAY_LIST     }->[5, 10]
+{ LR_DECAY_R        }->0.2
+{ MAX_EPOCH         }->20
+{ MODEL             }->mcan_detected
+{ MODEL_USE         }->mcan
+{ MULTI_HEAD        }->8
+{ NUM_WORKERS       }->8
+{ N_GPU             }->1
+{ OBJ_FEAT_SIZE     }->[100, 16]
+{ OPT               }->Adam
+{ OPT_PARAMS        }->{'betas': (0.9, 0.98), 'eps': 1e-09, 'weight_decay': 0.0005, 'amsgrad': False}
+{ PIN_MEM           }->True
+{ RAW_PATH          }->{'train': './data/questions/NuScenes_train_questions.json', 'val': './data/questions/NuScenes_val_questions.json'}
+{ RESULT_PATH       }->./outputs/result
+{ RESUME            }->False
+{ RUN_MODE          }->train
+{ SEED              }->9076212
+{ SPLIT             }->{'train': 'train', 'val': 'val'}
+{ SUB_BATCH_SIZE    }->32
+{ TEACHER_CKPT      }->./outputs/ckpts/ckpt_annot_v1/epoch16.pkl
+{ USE_BBOX_FEAT     }->False
+{ USE_KD            }->True
+{ USE_YOLO_DETECTION }->False
+{ VERSION           }->detected_distilled_finetune
+{ VISUAL_FEATURE    }->detected
+{ WARMUP_EPOCH      }->0
+{ WORD_EMBED_SIZE   }->300
+=====================================
+nowTime: 2026-04-07 18:54:30
+Epoch: 1, Loss: 0.5159963532487613, Lr: 1.5e-05
+Elapsed time: 851, Speed(s/batch): 0.0723936324173054
+
+Overall : 38762 / 83337 = 46.51
+comparison : 6953 / 12809 = 54.28
+comparison_0 : 605 / 1150 = 52.61
+comparison_1 : 6348 / 11659 = 54.45
+count : 2005 / 16471 = 12.17
+count_0 : 932 / 8119 = 11.48
+count_1 : 1073 / 8352 = 12.85
+exist : 16361 / 24634 = 66.42
+exist_0 : 7349 / 11337 = 64.82
+exist_1 : 9012 / 13297 = 67.77
+object : 7485 / 17446 = 42.90
+object_0 : 1651 / 2568 = 64.29
+object_1 : 5834 / 14878 = 39.21
+status : 5958 / 11977 = 49.75
+status_0 : 2312 / 4070 = 56.81
+status_1 : 3646 / 7907 = 46.11
+
+=====================================
+nowTime: 2026-04-07 19:10:25
+Epoch: 2, Loss: 0.5011857873772974, Lr: 1.5e-05
+Elapsed time: 858, Speed(s/batch): 0.07293041345215752
+
+=====================================
+nowTime: 2026-04-07 19:24:45

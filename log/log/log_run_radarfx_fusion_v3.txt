@@ -1,0 +1,183 @@
+{ BATCH_SIZE        }->32
+{ BBOXFEAT_EMB_SIZE }->256
+{ BBOX_FEAT_SIZE    }->[100, 4]
+{ BBOX_NORMALIZE    }->False
+{ CKPTS_PATH        }->./outputs/ckpts
+{ CKPT_EPOCH        }->0
+{ CKPT_PATH         }->None
+{ CKPT_VERSION      }->913090
+{ COUNT_LOSS_WEIGHT }->0.0
+{ CROSS_MODAL_LAYERS }->0
+{ DATA_ROOT         }->./data
+{ DEVICES           }->[0]
+{ DROPOUT_R         }->0.15
+{ EARLY_STOP_PATIENCE }->10
+{ EVAL_BATCH_SIZE   }->16
+{ EVAL_FREQUENCY    }->3
+{ FEATS_PATH        }->{'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}, 'fusion': {'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'yolo': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/yolo_features'}}, 'annot': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/annotation_features'}, 'detected': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/detected_features'}, 'radarxf': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'}, 'radarxf_fusion': {'bev': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/bev_features'}, 'radarxf': {'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2', 'val': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'}}}
+{ FEAT_SIZE         }->{'OBJ_FEAT_SIZE': (100, 48), 'BBOX_FEAT_SIZE': (100, 4)}
+{ FF_SIZE           }->1024
+{ FLAT_GLIMPSES     }->3
+{ FLAT_MLP_SIZE     }->256
+{ FLAT_OUT_SIZE     }->512
+{ FUSE_RADAR_DATA   }->False
+{ GPU               }->0
+{ GRAD_ACCU_STEPS   }->1
+{ GRAD_NORM_CLIP    }->0.5
+{ HIDDEN_SIZE       }->256
+{ LABEL_SMOOTHING   }->0.1
+{ LAYER             }->3
+{ LOG_PATH          }->./outputs/log
+{ LOSS_FUNC         }->ce
+{ LOSS_FUNC_NAME_DICT }->{'ce': 'CrossEntropyLoss', 'bce': 'BCEWithLogitsLoss', 'kld': 'KLDivLoss', 'mse': 'MSELoss'}
+{ LOSS_FUNC_NONLINEAR }->{'ce': [None, 'flat'], 'bce': [None, None], 'kld': ['log_softmax', None], 'mse': [None, None]}
+{ LOSS_REDUCTION    }->sum
+{ LR_BASE           }->0.00015
+{ LR_DECAY_LIST     }->[10, 15]
+{ LR_DECAY_R        }->0.2
+{ MAX_EPOCH         }->20
+{ MODEL             }->mcan_radarxformer
+{ MODEL_USE         }->mcan
+{ MULTI_HEAD        }->8
+{ NUM_WORKERS       }->8
+{ N_GPU             }->1
+{ OBJ_FEAT_SIZE     }->[100, 48]
+{ OPT               }->Adam
+{ OPT_PARAMS        }->{'betas': (0.9, 0.98), 'eps': 1e-09, 'weight_decay': 0.0001, 'amsgrad': False}
+{ PIN_MEM           }->True
+{ RAW_PATH          }->{'train': './data/questions/NuScenes_train_questions.json', 'val': './data/questions/NuScenes_val_questions.json'}
+{ REFINEMENT_ITERATIONS }->0
+{ RESULT_PATH       }->./outputs/result
+{ RESUME            }->False
+{ RUN_MODE          }->train
+{ SEED              }->913090
+{ SPLIT             }->{'train': 'train', 'val': 'val'}
+{ SUB_BATCH_SIZE    }->32
+{ USE_BBOX_FEAT     }->False
+{ USE_CLIP_FEATURES }->True
+{ USE_SPATIAL_PE    }->False
+{ USE_YOLO_DETECTION }->False
+{ VERSION           }->radarfx_fusion_v3
+{ VISUAL_FEATURE    }->radarxf_fusion
+{ WARMUP_EPOCH      }->4
+{ WORD_EMBED_SIZE   }->300
+=====================================
+nowTime: 2026-04-10 19:30:48
+Epoch: 1, Loss: 1.623183451613418, Lr: 2.9999999999999997e-05
+Elapsed time: 1417, Speed(s/batch): 0.12048445873970405
+
+Overall : 43788 / 83337 = 52.54
+comparison : 8311 / 12809 = 64.88
+comparison_0 : 932 / 1150 = 81.04
+comparison_1 : 7379 / 11659 = 63.29
+count : 2948 / 16471 = 17.90
+count_0 : 1520 / 8119 = 18.72
+count_1 : 1428 / 8352 = 17.10
+exist : 18730 / 24634 = 76.03
+exist_0 : 9198 / 11337 = 81.13
+exist_1 : 9532 / 13297 = 71.69
+object : 7558 / 17446 = 43.32
+object_0 : 1583 / 2568 = 61.64
+object_1 : 5975 / 14878 = 40.16
+status : 6241 / 11977 = 52.11
+status_0 : 2355 / 4070 = 57.86
+status_1 : 3886 / 7907 = 49.15
+
+=====================================
+nowTime: 2026-04-10 19:57:35
+Epoch: 2, Loss: 1.560272743464633, Lr: 5.9999999999999995e-05
+Elapsed time: 1425, Speed(s/batch): 0.12115817210611075
+
+=====================================
+nowTime: 2026-04-10 20:21:30
+Epoch: 3, Loss: 1.5460376403111218, Lr: 8.999999999999999e-05
+Elapsed time: 1436, Speed(s/batch): 0.12208318752872951
+
+=====================================
+nowTime: 2026-04-10 20:45:34
+Epoch: 4, Loss: 1.5434970576856013, Lr: 0.00015
+Elapsed time: 1725, Speed(s/batch): 0.14661928826979762
+
+Overall : 45158 / 83337 = 54.19
+comparison : 8626 / 12809 = 67.34
+comparison_0 : 893 / 1150 = 77.65
+comparison_1 : 7733 / 11659 = 66.33
+count : 3086 / 16471 = 18.74
+count_0 : 1558 / 8119 = 19.19
+count_1 : 1528 / 8352 = 18.30
+exist : 19777 / 24634 = 80.28
+exist_0 : 9243 / 11337 = 81.53
+exist_1 : 10534 / 13297 = 79.22
+object : 7588 / 17446 = 43.49
+object_0 : 1529 / 2568 = 59.54
+object_1 : 6059 / 14878 = 40.72
+status : 6081 / 11977 = 50.77
+status_0 : 2291 / 4070 = 56.29
+status_1 : 3790 / 7907 = 47.93
+
+=====================================
+nowTime: 2026-04-10 21:17:40
+Epoch: 5, Loss: 1.543086109302578, Lr: 0.00015
+Elapsed time: 1895, Speed(s/batch): 0.16103103442876052
+
+=====================================
+nowTime: 2026-04-10 21:49:27
+Epoch: 6, Loss: 1.5391475904667933, Lr: 0.00015
+Elapsed time: 1908, Speed(s/batch): 0.16218085055202144
+
+=====================================
+nowTime: 2026-04-10 22:21:27
+Epoch: 7, Loss: 1.5375673970373813, Lr: 0.00015
+Elapsed time: 1903, Speed(s/batch): 0.16175894731976076
+
+Overall : 45682 / 83337 = 54.82
+comparison : 8611 / 12809 = 67.23
+comparison_0 : 926 / 1150 = 80.52
+comparison_1 : 7685 / 11659 = 65.91
+count : 3339 / 16471 = 20.27
+count_0 : 1696 / 8119 = 20.89
+count_1 : 1643 / 8352 = 19.67
+exist : 19891 / 24634 = 80.75
+exist_0 : 9372 / 11337 = 82.67
+exist_1 : 10519 / 13297 = 79.11
+object : 7681 / 17446 = 44.03
+object_0 : 1549 / 2568 = 60.32
+object_1 : 6132 / 14878 = 41.22
+status : 6160 / 11977 = 51.43
+status_0 : 2349 / 4070 = 57.71
+status_1 : 3811 / 7907 = 48.20
+
+=====================================
+nowTime: 2026-04-10 22:56:25
+Epoch: 8, Loss: 1.5366254889821096, Lr: 0.00015
+Elapsed time: 1899, Speed(s/batch): 0.1613829024667889
+
+=====================================
+nowTime: 2026-04-10 23:28:15
+Epoch: 9, Loss: 1.5363345271730635, Lr: 0.00015
+Elapsed time: 1895, Speed(s/batch): 0.16104824359849712
+
+=====================================
+nowTime: 2026-04-10 23:59:58
+Epoch: 10, Loss: 1.5363992379830496, Lr: 0.00015
+Elapsed time: 1904, Speed(s/batch): 0.16184325156610568
+
+Overall : 45436 / 83337 = 54.52
+comparison : 8599 / 12809 = 67.13
+comparison_0 : 889 / 1150 = 77.30
+comparison_1 : 7710 / 11659 = 66.13
+count : 3294 / 16471 = 20.00
+count_0 : 1637 / 8119 = 20.16
+count_1 : 1657 / 8352 = 19.84
+exist : 19796 / 24634 = 80.36
+exist_0 : 9356 / 11337 = 82.53
+exist_1 : 10440 / 13297 = 78.51
+object : 7786 / 17446 = 44.63
+object_0 : 1655 / 2568 = 64.45
+object_1 : 6131 / 14878 = 41.21
+status : 5961 / 11977 = 49.77
+status_0 : 2305 / 4070 = 56.63
+status_1 : 3656 / 7907 = 46.24
+
+=====================================
+nowTime: 2026-04-11 00:35:01
