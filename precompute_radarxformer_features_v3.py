@@ -784,7 +784,7 @@ def fit_pca(nusc, yolo_model, clip_extractor, Quaternion, device='cuda',
 
             bboxes = result.boxes.xyxy.cpu().numpy()
             classes = result.boxes.cls.cpu().numpy().astype(int)
-            valid_mask = np.array([int(c) in VALID_COCO_IDS for c in classes])
+            valid_mask = np.array([int(c) in VALID_YOLO_IDS for c in classes])
 
             if not valid_mask.any():
                 continue
