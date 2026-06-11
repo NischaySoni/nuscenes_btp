@@ -103,8 +103,10 @@ class NuScenes_QA(Data.Dataset):
         elif self.is_trimodal_fusion:
             # Trimodal Fusion: BEV + RadarXF + LiDAR
             bev_dir = __C.FEATS_PATH['trimodal_fusion']['bev'][split]
-            radarxf_dir = __C.FEATS_PATH['trimodal_fusion']['radarxf'][split]
+            rxf_key = 'radarxf_v3' if getattr(__C, 'USE_RADARXF_V3', False) else 'radarxf'
+            radarxf_dir = __C.FEATS_PATH['trimodal_fusion'][rxf_key][split]
             lidar_dir = __C.FEATS_PATH['trimodal_fusion']['lidar'][split]
+            print(f"  [Features] RadarXF: {rxf_key} from {radarxf_dir}")
 
             self.stk2bevpath = {
                 os.path.basename(p).split('.')[0]: p

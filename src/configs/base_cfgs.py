@@ -100,6 +100,10 @@ class BaseCfgs(PATH):
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v2'
                 },
+                'radarxf_v3': {
+                    'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v3',
+                    'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/radarxf_features_v3'
+                },
                 'lidar': {
                     'train': '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/lidar_bev_features',
                     'val':   '/media/nas_mount/anwar2/experiment/dataset/nuscenes/nischay/lidar_bev_features'
