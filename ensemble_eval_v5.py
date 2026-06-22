@@ -402,9 +402,10 @@ def main():
                     if n_models == 2:
                         break  # inner loop not needed for 2 models
         else:
-            # For 4+ models: random search
+            # For 4+ models: random search with large budget + refinement
             np.random.seed(42)
-            for _ in range(5000):
+            n_trials = 20000 if n_models <= 7 else 10000
+            for trial in range(n_trials):
                 raw = np.random.dirichlet(np.ones(n_models))
                 weights = raw.tolist()
                 correct = 0
@@ -420,6 +421,28 @@ def main():
                 if acc > best_acc:
                     best_acc = acc
                     best_w = list(weights)
+
+            # Local refinement around the best weights found
+            if best_w is not None:
+                for _ in range(2000):
+                    perturb = np.random.normal(0, 0.05, n_models)
+                    candidate = np.array(best_w) + perturb
+                    candidate = np.clip(candidate, 0, None)
+                    candidate = candidate / candidate.sum()
+                    weights = candidate.tolist()
+                    correct = 0
+                    total_valid = 0
+                    for idx in indices:
+                        if idx not in valid_gt:
+                            continue
+                        logits_i = sum(weights[m] * all_logits[m][idx, :n_classes] for m in range(n_models))
+                        if np.argmax(logits_i) == valid_gt[idx]:
+                            correct += 1
+                        total_valid += 1
+                    acc = correct / total_valid if total_valid > 0 else 0
+                    if acc > best_acc:
+                        best_acc = acc
+                        best_w = list(weights)
 
         if best_w:
             best_type_weights[qt] = best_w
