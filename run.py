@@ -54,6 +54,8 @@ def parse_args():
                            'mcan_trimodal_v27_distilbert_v3',
                            'mcan_trimodal_v28_highreg',
                            'mcan_trimodal_v29_v2seed',
+                           'mcan_trimodal_v30_countfocus',
+                           'mcan_trimodal_v31_shallow_wide',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',

@@ -343,9 +343,10 @@ def train_engine(__C, dataset, dataset_eval=None):
                     # pred is a dict: {qtype_name: (B, n_head_classes)}
                     loss = torch.tensor(0.0, device=sub_ans_iter.device)
                     batch_n = 0
-                    # qtype weights: exist=1.0, count=2.0, object=3.0, status=3.0, comparison=1.0
+                    # qtype weights: configurable from MH_QTYPE_WEIGHTS, or defaults
                     # Note: QTYPE_NAMES order is ['exist', 'count', 'object', 'status', 'comparison']
-                    mh_qtype_weights = [1.0, 2.0, 3.0, 3.0, 1.0] if use_qtype_weights else [1.0]*5
+                    default_mh_weights = [1.0, 2.0, 3.0, 3.0, 1.0]
+                    mh_qtype_weights = getattr(__C, 'MH_QTYPE_WEIGHTS', default_mh_weights) if use_qtype_weights else [1.0]*5
                     for qi, qname in enumerate(QTYPE_NAMES):
                         qmask = (sub_qtype_iter == qi)
                         if qmask.any():
