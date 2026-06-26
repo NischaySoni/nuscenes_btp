@@ -178,7 +178,6 @@ def stacking_model_selection(X, y_gt, all_logits, valid_indices, qtypes,
         clf = LogisticRegression(
             max_iter=1000,
             C=1.0,
-            multi_class='multinomial',
             solver='lbfgs',
             random_state=42
         )
