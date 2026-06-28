@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------
+# Trimodal V33: Extended Training — 25 Epochs with Late Decay
+#
+# ALL previous models train for only 15 epochs with LR decay at
+# epochs 10, 12. This model trains for 25 epochs with late decay
+# at epochs 15, 20 — giving the model much more time to learn
+# fine-grained patterns.
+#
+# Key differences:
+#   1. MAX_EPOCH: 25 (67% more training)
+#   2. LR_DECAY_LIST: [15, 20] (later decay = longer high-LR phase)
+#   3. WARMUP_EPOCH: 5 (longer warmup for stability)
+#   4. V3 features + BERT-base 4 layers + multi-head
+#   5. Higher LR_BASE (0.00004) to compensate for longer schedule
+#
+# The insight: our models' loss is still decreasing at epoch 15.
+# More training time should push accuracy higher.
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 59]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+LAYER: 6
+HIDDEN_SIZE: 512
+BBOXFEAT_EMB_SIZE: 512
+FF_SIZE: 2048
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 512
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1024
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+WORD_EMBED_SIZE: 300
+
+USE_BERT: True
+USE_DISTILBERT: False
+BERT_FINETUNE_LAYERS: 4
+
+USE_MAP_FEATURES: True
+MAP_DIM: 11
+ENRICH_FEATURES: False
+USE_RADARXF_V3: True
+USE_MULTI_HEAD: True
+
+# ★ Extended training schedule
+BATCH_SIZE: 32
+LR_BASE: 0.00004
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [15, 20]
+WARMUP_EPOCH: 5
+MAX_EPOCH: 25
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: True
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0

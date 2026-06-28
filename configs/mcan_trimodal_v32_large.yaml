@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------
+# Trimodal V32: Large Model — 768 Hidden Size
+#
+# ALL previous models use HIDDEN_SIZE=512. This is the first to
+# use 768, matching BERT's native dimension (no projection loss).
+#
+# Key differences from V24:
+#   1. HIDDEN_SIZE: 768 (50% larger than 512)
+#   2. FLAT_OUT_SIZE: 1536 (matching 2x hidden)
+#   3. FF_SIZE: 3072 (4x hidden, standard transformer ratio)
+#   4. No lang_proj bottleneck (BERT 768 → MCAN 768 directly)
+#   5. BERT 4 layers unfrozen + V3 features + multi-head
+#   6. Lower LR to account for larger model
+#
+# Expected: higher capacity = better feature interaction,
+# especially for hard types (object, status, count)
+# ---------------------------------------------------------------
+
+MODEL_USE: mcan
+VISUAL_FEATURE: trimodal_fusion
+
+OBJ_FEAT_SIZE: [80, 75]
+BBOX_FEAT_SIZE: [100, 59]
+LIDAR_FEAT_SIZE: [80, 6]
+CAMERA_BEV_DIM: 69
+
+# ★ Larger MCAN (768-dim, matching BERT native)
+LAYER: 6
+HIDDEN_SIZE: 768
+BBOXFEAT_EMB_SIZE: 768
+FF_SIZE: 3072
+MULTI_HEAD: 8
+DROPOUT_R: 0.1
+FLAT_MLP_SIZE: 768
+FLAT_GLIMPSES: 1
+FLAT_OUT_SIZE: 1536
+USE_BBOX_FEAT: False
+BBOX_NORMALIZE: False
+WORD_EMBED_SIZE: 300
+
+USE_BERT: True
+USE_DISTILBERT: False
+BERT_FINETUNE_LAYERS: 4
+
+USE_MAP_FEATURES: True
+MAP_DIM: 11
+ENRICH_FEATURES: False
+USE_RADARXF_V3: True
+USE_MULTI_HEAD: True
+
+BATCH_SIZE: 32
+LR_BASE: 0.00002
+LR_DECAY_R: 0.2
+LR_DECAY_LIST: [10, 12]
+WARMUP_EPOCH: 3
+MAX_EPOCH: 22
+GRAD_NORM_CLIP: 1.0
+GRAD_ACCU_STEPS: 4
+LOSS_FUNC: ce
+LOSS_REDUCTION: sum
+OPT: Adam
+OPT_PARAMS: {betas: '(0.9, 0.98)', eps: '1e-9', weight_decay: '0.0001'}
+
+COUNT_LOSS_WEIGHT: 0.5
+LABEL_SMOOTHING: 0.1
+CROSS_MODAL_LAYERS: 2
+USE_YOLO_DETECTION: False
+FUSE_RADAR_DATA: False
+USE_QTYPE_WEIGHTS: True
+USE_CLIP_FEATURES: True
+USE_SPATIAL_PE: False
+REFINEMENT_ITERATIONS: 0
