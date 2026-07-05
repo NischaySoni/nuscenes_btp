@@ -58,6 +58,7 @@ def parse_args():
                            'mcan_trimodal_v31_shallow_wide',
                            'mcan_trimodal_v32_large',
                            'mcan_trimodal_v33_extended',
+                           'mcan_trimodal_v34_glove',
                            'mcan_centerpoint_fusion',
                            'mcan_centerpoint',
                            'mcan_large',
