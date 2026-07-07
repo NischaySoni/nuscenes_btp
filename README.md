@@ -1,26 +1,47 @@
 # NuScenes-QA: Trimodal Fusion & Smart Ensembling
 
-This repository provides an advanced implementation for Visual Question Answering on the **nuScenes dataset**. We push beyond standard baseline models by implementing a **Trimodal Fusion Architecture** and a **Smart Ensembling Pipeline**, achieving **58.86% accuracy** (Oracle Ceiling: 72.20%) on open-vocabulary autonomous driving QA tasks.
+This repository provides an advanced implementation for Visual Question Answering on the **nuScenes dataset**. We push beyond standard baseline models by implementing a **Trimodal Fusion Architecture** and a **Smart Ensembling Pipeline**, achieving **60.44% accuracy** (Oracle Ceiling: 79.18%) on open-vocabulary autonomous driving QA tasks.
 
 ## 📊 Results Summary
 
+### 🏆 Best Ensemble: 60.44% (13-Model Variable Bins)
+
 | Strategy | Overall | Exist | Count | Object | Status | Comparison |
 |---|---|---|---|---|---|---|
-| **Grid Search (5-model)** | **58.86%** | 84.43 | 22.74 | 50.09 | 57.41 | 69.43 |
-| Conf-Gated (0.7) | 58.68% | 84.25 | 22.74 | 49.98 | 56.90 | 69.23 |
-| Agreement Router | 58.47% | 84.24 | 22.31 | 49.55 | 56.92 | 69.04 |
-| Best Single Model (V15) | 57.69% | 83.90 | 21.95 | 48.47 | 55.51 | 67.87 |
-| Oracle Ceiling | **72.20%** | 89.25 | 43.01 | 67.38 | 74.65 | 81.22 |
+| **Variable Bins (13-model)** | **60.44%** | 84.73 | 25.34 | 52.53 | 59.50 | 70.60 |
+| ConfBins-10 (13-model) | 60.26% | 84.61 | 25.17 | 52.26 | 59.17 | 70.44 |
+| ConfBins-8 (13-model) | 60.12% | 84.61 | 24.73 | 52.12 | 59.17 | 70.33 |
+| ConfBins-7 (13-model) | 60.10% | 84.60 | 24.81 | 52.14 | 58.95 | 70.26 |
+| Scipy Optimized (9-model) | 59.27% | 84.49 | 23.16 | 50.91 | 57.96 | 69.81 |
+| Grid Search (8-model) | 59.12% | 84.43 | 22.91 | 50.73 | 57.69 | 69.78 |
+| Best Single Model (V29) | 57.78% | 84.16 | 21.28 | 48.22 | 55.76 | 68.88 |
+| Oracle Ceiling (13-model) | **79.18%** | — | — | — | — | — |
 
-### Model Library
+### Accuracy Progression
 
-| Model | Config | Best Overall | Key Strength |
+```
+57.78% ──► 58.86% ──► 59.12% ──► 59.27% ──► 59.88% ──► 60.44%
+single    5-model    8-model    scipy       conf-bins   variable
+model     grid       grid       9-model     5×13        bins 13
+```
+
+### Model Library (13 Models)
+
+| Model | Config | Overall | Key Differentiator |
 |---|---|---|---|
-| V14 | `mcan_trimodal_v14_bert_ft` | 57.37% | Comparison (68.83%) |
-| V15 | `mcan_trimodal_v15_bert_mh` | 57.69% | Count (21.95%), Multi-head |
-| V16 | `mcan_trimodal_v16_bert_deep` | 57.58% | Status (56.23%) |
-| V18 | `mcan_trimodal_v18_bert_base` | 57.64% | BERT-base encoder |
-| V24 | `mcan_trimodal_v24_yoloworld` | 57.72% | Object (49.02%), YOLOWorld features |
+| V14 | `mcan_trimodal_v14_bert_ft` | 57.37% | BERT-4L, V2 features |
+| V15 | `mcan_trimodal_v15_bert_mh` | 57.69% | DistilBERT-2L, V2 features |
+| V16 | `mcan_trimodal_v16_bert_deep` | 57.58% | BERT-6L, V2 features |
+| V18 | `mcan_trimodal_v18_bert_base` | 57.64% | BERT-4L, V2 features |
+| V24 | `mcan_trimodal_v24_yoloworld` | 57.60% | BERT-4L, **V3 YOLOWorld** features |
+| V25 | `mcan_trimodal_v25_yoloworld_seed2` | 57.65% | V24 config, seed=7777 |
+| V26 | `mcan_trimodal_v26_deep_yoloworld` | 57.44% | BERT-6L, V3 features, seed=9999 |
+| V27 | `mcan_trimodal_v27_distilbert_v3` | 57.50% | **DistilBERT + V3 + single-head** |
+| V29 | `mcan_trimodal_v29_v2seed` | 57.78% | BERT-4L, V2 features, **seed=5555** |
+| V30 | `mcan_trimodal_v30_countfocus` | 55.83% | Count-focused (high count loss weight) |
+| V31 | `mcan_trimodal_v31_shallow_wide` | 57.57% | **4-layer MCAN, 4096 FFN, 2048 proj** |
+| V32 | `mcan_trimodal_v32_large` | 57.56% | **768 hidden (matches BERT native)** |
+| V33 | `mcan_trimodal_v33_extended` | 57.35% | 25 epochs, late LR decay |
 
 ---
 
@@ -37,15 +58,26 @@ This repository provides an advanced implementation for Visual Question Answerin
 - Attention-weighted multi-radar aggregation inspired by RadarXFormer's deformable cross-attention.
 - Multi-view triangulation across 6 cameras with radar-primary depth refinement.
 
-### 3. Smart Ensembling Pipeline (V1–V5)
-Five progressively more sophisticated ensemble evaluation scripts:
+### 3. Smart Ensembling Pipeline (V1–V11)
+Progressively more sophisticated ensemble strategies:
 
-| Script | Strategies |
-|---|---|
-| `ensemble_eval_v2.py` | Basic weighted averaging with auto key remapping |
-| `ensemble_eval_v3.py` | Q-Type routed, majority vote, best-model, top-2 |
-| `ensemble_eval_v4.py` | Oracle analysis, temperature sweep, confidence-weighted, hybrid, grid search |
-| `ensemble_eval_v5.py` | Agreement router, confidence-gated, margin router, rank fusion (Borda), Dirichlet grid search for 4+ models |
+| Script | Strategy | Best Accuracy |
+|---|---|---|
+| `ensemble_eval_v5.py` | Dirichlet grid search, agreement routing, confidence gating | 59.12% |
+| `ensemble_eval_v7.py` | Scipy differential evolution (global optimizer) | 59.27% |
+| `ensemble_eval_v9.py` | Confidence-binned per-type optimization | 59.46% |
+| `ensemble_eval_v10.py` | Multi-bin sweep (3–5 bins) + subtype × confidence | 59.88% |
+| **`ensemble_eval_v11.py`** | **Per-type variable bin count (3–12 sweep)** | **60.44%** |
+
+### 4. Per-Type Variable Bins (Key to 60%+)
+The breakthrough insight: different question types need different confidence granularity.
+- **exist** (84.73%): Highly confident — 12 bins for fine-tuning edge cases
+- **count** (25.34%): Huge variance — 12 bins to separate easy/hard count patterns
+- **object** (52.53%): 12 bins for better hard-sample routing
+- **status** (59.50%): 12 bins optimized independently
+- **comparison** (70.60%): 12 bins with high-confidence regions near 100%
+
+Each bin gets its own scipy-optimized 13-dimensional weight vector via differential evolution.
 
 ---
 
@@ -67,12 +99,6 @@ CUDA_VISIBLE_DEVICES=0 python precompute_radarxformer_features_v3.py --mode extr
 CUDA_VISIBLE_DEVICES=0 python precompute_radarxformer_features.py --mode all
 ```
 
-### 3. Annotation & Detected Features (Baselines)
-```bash
-python precompute_annotation_features.py --data-root /path/to/nuscenes
-python precompute_detected_features.py --data-root /path/to/nuscenes
-```
-
 ---
 
 ## 🧠 Training
@@ -80,48 +106,49 @@ python precompute_detected_features.py --data-root /path/to/nuscenes
 Train trimodal fusion models. All configs are in `configs/` and registered in `run.py`.
 
 ```bash
-# V24: BERT-base + YOLOWorld features (best individual model)
-python run.py --RUN train --MODEL mcan_trimodal_v24_yoloworld --GPU 0 --VERSION trimodal_yoloworld_v1
+# V29: Best individual model (BERT-base + V2 features + seed=5555)
+python run.py --RUN train --MODEL mcan_trimodal_v29_v2seed --GPU 0 \
+    --VERSION trimodal_v2seed_v1 --SEED 5555
 
-# V15: DistilBERT + Multi-head (best count accuracy)
-python run.py --RUN train --MODEL mcan_trimodal_v15_bert_mh --GPU 0 --VERSION trimodal_bert_mh_v1
+# V24: BERT-base + YOLOWorld V3 features
+python run.py --RUN train --MODEL mcan_trimodal_v24_yoloworld --GPU 0 \
+    --VERSION trimodal_yoloworld_v1
 
-# V18: BERT-base baseline
-python run.py --RUN train --MODEL mcan_trimodal_v18_bert_base --GPU 0 --VERSION trimodal_bert_base_v1
+# V32: Large model (768-dim hidden matching BERT native)
+python run.py --RUN train --MODEL mcan_trimodal_v32_large --GPU 0 \
+    --VERSION trimodal_large_v1
 ```
 
 ---
 
 ## 🔮 Smart Ensemble Evaluation
 
-Run `ensemble_eval_v5.py` with the best 5 models for maximum accuracy. Automatically evaluates Oracle Ceiling, Agreement Router, Confidence-Gated, Margin, Rank Fusion, and Grid Search.
+Run `ensemble_eval_v11.py` with all 13 models for maximum accuracy:
 
 ```bash
-python ensemble_eval_v5.py \
+python ensemble_eval_v11.py \
     --models mcan_trimodal_v14_bert_ft:trimodal_bert_ft_v1:16 \
              mcan_trimodal_v15_bert_mh:trimodal_bert_mh_v1:22 \
              mcan_trimodal_v16_bert_deep:trimodal_bert_deep_v1:16 \
              mcan_trimodal_v18_bert_base:trimodal_bert_base_v1:15 \
              mcan_trimodal_v24_yoloworld:trimodal_yoloworld_v1:16 \
+             mcan_trimodal_v25_yoloworld_seed2:trimodal_yoloworld_v2:16 \
+             mcan_trimodal_v26_deep_yoloworld:trimodal_deep_yoloworld_v1:16 \
+             mcan_trimodal_v27_distilbert_v3:trimodal_distilbert_v3_v1:16 \
+             mcan_trimodal_v29_v2seed:trimodal_v2seed_v1:16 \
+             mcan_trimodal_v30_countfocus:trimodal_countfocus_v1:10 \
+             mcan_trimodal_v31_shallow_wide:trimodal_shallow_wide_v1:12 \
+             mcan_trimodal_v32_large:trimodal_large_v1:12 \
+             mcan_trimodal_v33_extended:trimodal_extended_v1:16 \
     --gpu 0
 ```
-
-### Grid Search Optimal Weights (5-model, per question type)
-
-| Type | V14 | V15 | V16 | V18 | V24 | Accuracy |
-|---|---|---|---|---|---|---|
-| exist | 0.01 | 0.14 | 0.34 | 0.07 | **0.44** | 84.43% |
-| count | 0.03 | **0.50** | 0.33 | 0.00 | 0.14 | 22.74% |
-| object | 0.07 | 0.23 | 0.01 | 0.13 | **0.57** | 50.09% |
-| status | 0.25 | 0.11 | **0.28** | **0.35** | 0.01 | 57.41% |
-| comparison | 0.26 | **0.36** | 0.32 | 0.04 | 0.02 | 69.43% |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-├── configs/                          # Model configuration YAML files (V1–V24)
+├── configs/                          # Model configs (V1–V34)
 ├── src/
 │   ├── models/mcan/                  # MCAN backbone, trimodal fusion, multi-head classifier
 │   ├── datasets/nuscenes_qa.py       # Dataset loader with trimodal feature loading
@@ -129,11 +156,11 @@ python ensemble_eval_v5.py \
 │   └── configs/base_cfgs.py          # Feature paths, hyperparameter defaults
 ├── precompute_radarxformer_features_v3.py   # YOLOWorld + CLIP feature extraction
 ├── precompute_radarxformer_features.py      # Legacy COCO YOLO extraction
-├── precompute_annotation_features.py        # Ground-truth annotation features
-├── ensemble_eval_v2.py               # Basic ensemble with key remapping
-├── ensemble_eval_v3.py               # Q-Type routed ensemble
-├── ensemble_eval_v4.py               # Oracle + temperature sweep + grid search
-├── ensemble_eval_v5.py               # Full advanced ensemble (recommended)
+├── ensemble_eval_v11.py              # 🏆 Best ensemble (variable bins)
+├── ensemble_eval_v10.py              # Multi-bin + subtype × confidence
+├── ensemble_eval_v9.py               # Confidence-binned optimization
+├── ensemble_eval_v7.py               # Scipy differential evolution
+├── ensemble_eval_v5.py               # Grid search + agreement routing
 ├── run.py                            # Main training/evaluation entry point
 └── log/                              # Training logs for all model versions
 ```

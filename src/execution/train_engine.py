@@ -214,14 +214,49 @@ def train_engine(__C, dataset, dataset_eval=None):
     best_eval_loss = float('inf')
     epochs_without_improvement = 0
 
-    dataloader = Data.DataLoader(
-        dataset,
-        batch_size=__C.BATCH_SIZE,
-        shuffle=True,
-        num_workers=__C.NUM_WORKERS,
-        pin_memory=__C.PIN_MEM,
-        drop_last=True
-    )
+    # --- Balanced sampling (for oversampling rare answers) ---
+    use_balanced = getattr(__C, 'USE_BALANCED_SAMPLING', False)
+    if use_balanced:
+        from collections import Counter
+        print("[Train] Using answer-balanced WeightedRandomSampler")
+        # Compute per-sample weights based on inverse answer frequency
+        ans2ix = dataset.ans2ix
+        answer_indices = []
+        for qa in dataset.qa_list:
+            ans_str = str(qa['answer'])
+            ans_idx = ans2ix.get(ans_str, 0)
+            answer_indices.append(ans_idx)
+        ans_counts = Counter(answer_indices)
+        total_samples = len(answer_indices)
+        # Inverse frequency with sqrt smoothing to avoid extreme weights
+        sample_weights = []
+        for ans_idx in answer_indices:
+            freq = ans_counts[ans_idx] / total_samples
+            weight = 1.0 / (np.sqrt(freq) + 1e-6)
+            sample_weights.append(weight)
+        sample_weights = torch.DoubleTensor(sample_weights)
+        sampler = Data.WeightedRandomSampler(
+            sample_weights, num_samples=len(sample_weights), replacement=True
+        )
+        dataloader = Data.DataLoader(
+            dataset,
+            batch_size=__C.BATCH_SIZE,
+            sampler=sampler,
+            num_workers=__C.NUM_WORKERS,
+            pin_memory=__C.PIN_MEM,
+            drop_last=True
+        )
+        print(f"  Answer classes: {len(ans_counts)}, "
+              f"Weight range: [{min(sample_weights):.2f}, {max(sample_weights):.2f}]")
+    else:
+        dataloader = Data.DataLoader(
+            dataset,
+            batch_size=__C.BATCH_SIZE,
+            shuffle=True,
+            num_workers=__C.NUM_WORKERS,
+            pin_memory=__C.PIN_MEM,
+            drop_last=True
+        )
 
     logfile_path = __C.LOG_PATH + '/log_run_' + __C.VERSION + '.txt'
     with open(logfile_path, 'a+') as logfile:
